@@ -1,2 +1,6 @@
 # job-platform-job-svc
-Job Posting CRUD and Category Management
+.NET Web API Job — part of **Vietnam Job Platform** (`pbl6`) under [`dut-pbl6-2026`](https://github.com/dut-pbl6-2026).
+- Tech: .NET Web API Job
+- Branch flow: `feature/* → develop → release/* → main` (see job-platform-docs/.github/git-strategy.md)
+- Jira PBL6 skid.atlassian.net, Master plan docs/master-plan.md
+- TM: TM1 Hoai, TM2 Thanh, TM3 Chi Bao, TM4 Khoa
