@@ -5,8 +5,14 @@ var builder = WebApplication.CreateBuilder(args);
 
 var conn = builder.Configuration.GetConnectionString("JobDb")
            ?? builder.Configuration["DATABASE_URL_JOB"]
-           ?? builder.Configuration["ConnectionStrings:JobDb"]
-           ?? "Host=localhost;Port=5432;Database=job_platform_job;Username=postgres;Password=postgres";
+           ?? builder.Configuration["ConnectionStrings:JobDb"];
+
+if (string.IsNullOrWhiteSpace(conn))
+{
+    throw new InvalidOperationException(
+        "Missing JobDb connection string. Configure ConnectionStrings:JobDb or DATABASE_URL_JOB.");
+}
+
 builder.Services.AddDbContext<JobDbContext>(o => o.UseNpgsql(conn));
 
 builder.Services.AddProblemDetails();
