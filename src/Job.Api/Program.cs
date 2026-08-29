@@ -39,7 +39,7 @@ using (var scope = app.Services.CreateScope())
 
     try
     {
-        db.Database.Migrate();
+        await db.Database.MigrateAsync();
         await SeedData.SeedCategoriesAsync(db);
         logger.LogInformation("DB migrated and categories seeded");
     }
