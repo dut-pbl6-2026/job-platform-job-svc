@@ -52,6 +52,32 @@ Dependency: `Api → Infrastructure → Core → SharedKernel` (`PackageReferenc
 
 Publisher of `job.created`, `job.updated`, `job.deleted` events via Kafka topic `job-events` (Week 2-3, after Kafka config by TM1). Payload: `job_id, title, company_id, company_name, location, category, recruiter_id`. Consumer: `search-svc` indexes to ES, `notif-svc` sends notifications.
 
+## No hard-coding (STRICT — apply to every file you touch)
+
+**NEVER** embed literal values for any of the following in source code (`.cs`, `.json`, `.yaml`, `.toml`, …):
+
+| Category | Examples of forbidden literals |
+|----------|--------------------------------|
+| Connection strings | `Host=localhost;Port=5432;Password=postgres` |
+| Ports / URLs | `http://localhost:5002`, `5432` |
+| Secrets / passwords | any plain-text password, API key, JWT secret |
+| Database / index names | `job_platform_job` (except in migrations) |
+
+**Always** read from `IConfiguration` / environment variables:
+
+```csharp
+// CORRECT — configuration first, env var fallback, no literal fallback
+var conn = builder.Configuration.GetConnectionString("JobDb")
+           ?? builder.Configuration["DATABASE_URL_JOB"]
+           ?? throw new InvalidOperationException(
+               "Connection string not configured. Set DATABASE_URL_JOB or ConnectionStrings:JobDb.");
+```
+
+- `appsettings.json` MAY contain **placeholder comments** like `"<set via env>"` but MUST NOT contain real credentials or real hostnames.
+- `appsettings.Development.json` MAY point to `localhost` **only** for local-dev convenience; never commit real passwords.
+- The single source of truth for all env values is `../job-platform-infra/envs/.env.dev.example` — use `mise run sync-env` to pull it.
+- Required env vars for this service: `DATABASE_URL_JOB`, `JWT_SECRET`.
+
 ## 2026 best practice (NFR `MAINT`)
 
 - `dotnet 10.0.100` `net10.0` `nullable enable` `ImplicitUsings` file-scoped namespace, `ProblemDetails` + `UseExceptionHandler` + `ILogger` JSON `ERROR/WARN/INFO/DEBUG`, `GET /health` per `8-system-architecture.md`.

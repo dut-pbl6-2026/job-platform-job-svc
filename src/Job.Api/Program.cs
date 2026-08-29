@@ -5,13 +5,8 @@ var builder = WebApplication.CreateBuilder(args);
 
 var conn = builder.Configuration.GetConnectionString("JobDb")
            ?? builder.Configuration["DATABASE_URL_JOB"]
-           ?? builder.Configuration["ConnectionStrings:JobDb"];
-
-if (string.IsNullOrWhiteSpace(conn))
-{
-    throw new InvalidOperationException(
-        "Missing JobDb connection string. Configure ConnectionStrings:JobDb or DATABASE_URL_JOB.");
-}
+           ?? throw new InvalidOperationException(
+               "Connection string not configured. Set DATABASE_URL_JOB env var or ConnectionStrings:JobDb in appsettings.");
 
 builder.Services.AddDbContext<JobDbContext>(o => o.UseNpgsql(conn));
 
