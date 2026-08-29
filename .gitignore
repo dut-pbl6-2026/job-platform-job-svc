@@ -2,7 +2,9 @@ bin/
 obj/
 .vs/
 *.nupkg
+!local-feed/*.nupkg
 .env
 .env.bak.*
 mise.toml.local
 INFISICAL_TOKEN
+appsettings.Development.json
