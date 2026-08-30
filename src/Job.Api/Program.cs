@@ -32,9 +32,10 @@ if (!builder.Environment.IsDevelopment())
     var jwtSection = builder.Configuration.GetSection(JwtOptions.SectionName);
     var jwt = jwtSection.Get<JwtOptions>() ?? new JwtOptions();
 
-    // SEC-08: never hardcode secret in prod; fallback dev-only
+    // SEC-08: never hardcode secret in prod — fail fast if not configured
     if (string.IsNullOrEmpty(jwt.Secret) || jwt.Secret.Length < 32)
-        jwt.Secret = "dev-jwt-secret-change-me-32chars-min";
+        throw new InvalidOperationException(
+            "JWT secret not configured or too short. Set JWT_SECRET env var (min 32 chars) or Jwt:Secret in configuration.");
 
     builder.Services
         .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -68,7 +69,14 @@ builder.Services.AddSwaggerGen(o =>
         In = Microsoft.OpenApi.Models.ParameterLocation.Header,
         Name = "X-User-Id",
         Type = Microsoft.OpenApi.Models.SecuritySchemeType.ApiKey,
-        Description = "Dev-only: paste a UUID here (also add X-Role header manually)"
+        Description = "Dev-only: paste a UUID here (also add X-User-Role header manually)"
+    });
+    o.AddSecurityDefinition("X-User-Role", new()
+    {
+        In = Microsoft.OpenApi.Models.ParameterLocation.Header,
+        Name = "X-User-Role",
+        Type = Microsoft.OpenApi.Models.SecuritySchemeType.ApiKey,
+        Description = "Dev-only: Recruiter | User (gateway forwards X-User-Id / X-User-Role per GW-01)"
     });
 });
 

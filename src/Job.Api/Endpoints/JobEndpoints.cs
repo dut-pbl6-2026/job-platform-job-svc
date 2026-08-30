@@ -28,14 +28,25 @@ public static class JobEndpoints
         return app;
     }
 
+    // Helpers to avoid Results.Forbid()/Unauthorized() which require an auth handler.
+    // In Development no JWT handler is registered (DevAuthMiddleware only), so Forbid()
+    // would throw InvalidOperationException. Use explicit JSON status codes instead.
+    private static IResult UnauthorizedResult() =>
+        Results.Json(new { message = "Unauthorized. Missing or invalid X-User-Id." }, statusCode: 401);
+
+    private static IResult ForbiddenResult(string message = "Forbidden. Recruiter role required.") =>
+        Results.Json(new { message }, statusCode: 403);
+
     private static async Task<IResult> CreateJob(
         JobCreateDto dto,
         JobDbContext db,
         HttpContext ctx)
     {
         var (recruiterId, role) = GetIdentity(ctx);
-        if (recruiterId is null || role != "Recruiter")
-            return Results.Forbid();
+        if (recruiterId is null)
+            return UnauthorizedResult();
+        if (role != "Recruiter")
+            return ForbiddenResult();
 
         if (string.IsNullOrWhiteSpace(dto.Title))
             return Results.ValidationProblem(new Dictionary<string, string[]>
@@ -53,6 +64,14 @@ public static class JobEndpoints
         if (!companyExists)
             return Results.ValidationProblem(new Dictionary<string, string[]>
             { ["companyId"] = ["Company not found."] });
+
+        if (dto.CategoryId.HasValue)
+        {
+            var categoryExists = await db.Categories.AnyAsync(c => c.Id == dto.CategoryId.Value);
+            if (!categoryExists)
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                { ["categoryId"] = ["Category not found."] });
+        }
 
         JobPosting job;
         try
@@ -78,8 +97,10 @@ public static class JobEndpoints
         JobDbContext db, HttpContext ctx, string? status = null, int page = 1, int size = 10)
     {
         var (recruiterId, role) = GetIdentity(ctx);
-        if (recruiterId is null || role != "Recruiter")
-            return Results.Forbid();
+        if (recruiterId is null)
+            return UnauthorizedResult();
+        if (role != "Recruiter")
+            return ForbiddenResult();
 
         size = Math.Clamp(size, 1, 100);
         page = Math.Max(1, page);
@@ -110,26 +131,54 @@ public static class JobEndpoints
 
         if (job is null) return Results.NotFound(new { message = "Job not found" });
 
-        job.IncrementView();
-        await db.SaveChangesAsync();
-        return Results.Ok(JobDetailDto.From(job));
+        // Atomic increment to avoid lost-update race under concurrent GETs.
+        // InMemory provider (unit tests) does not support ExecuteUpdateAsync, so fallback to tracked increment.
+        if (db.Database.ProviderName == "Microsoft.EntityFrameworkCore.InMemory")
+        {
+            job.IncrementView();
+            await db.SaveChangesAsync();
+            return Results.Ok(JobDetailDto.From(job));
+        }
+        else
+        {
+            await db.Jobs.Where(j => j.Id == id)
+                .ExecuteUpdateAsync(s => s.SetProperty(j => j.ViewCount, j => j.ViewCount + 1));
+            // Return DTO with incremented count without mutating private-setter entity
+            var dto = JobDetailDto.From(job) with { ViewCount = job.ViewCount + 1 };
+            return Results.Ok(dto);
+        }
     }
 
     private static async Task<IResult> UpdateJob(
         Guid id, JobUpdateDto dto, JobDbContext db, HttpContext ctx)
     {
         var (recruiterId, role) = GetIdentity(ctx);
-        if (recruiterId is null || role != "Recruiter")
-            return Results.Forbid();
+        if (recruiterId is null)
+            return UnauthorizedResult();
+        if (role != "Recruiter")
+            return ForbiddenResult();
 
         var job = await db.Jobs.IgnoreQueryFilters().FirstOrDefaultAsync(j => j.Id == id);
         if (job is null) return Results.NotFound(new { message = "Job not found" });
         if (job.RecruiterId != Guid.Parse(recruiterId))
-            return Results.Forbid();
+            return ForbiddenResult("Forbidden. You do not own this job.");
 
         if (string.IsNullOrWhiteSpace(dto.Title))
             return Results.ValidationProblem(new Dictionary<string, string[]>
             { ["title"] = ["Title is required."] });
+
+        var companyExists = await db.Companies.AnyAsync(c => c.Id == dto.CompanyId);
+        if (!companyExists)
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            { ["companyId"] = ["Company not found."] });
+
+        if (dto.CategoryId.HasValue)
+        {
+            var categoryExists = await db.Categories.AnyAsync(c => c.Id == dto.CategoryId.Value);
+            if (!categoryExists)
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                { ["categoryId"] = ["Category not found."] });
+        }
 
         try
         {
@@ -151,13 +200,15 @@ public static class JobEndpoints
     private static async Task<IResult> DeleteJob(Guid id, JobDbContext db, HttpContext ctx)
     {
         var (recruiterId, role) = GetIdentity(ctx);
-        if (recruiterId is null || role != "Recruiter")
-            return Results.Forbid();
+        if (recruiterId is null)
+            return UnauthorizedResult();
+        if (role != "Recruiter")
+            return ForbiddenResult();
 
         var job = await db.Jobs.IgnoreQueryFilters().FirstOrDefaultAsync(j => j.Id == id);
         if (job is null) return Results.NotFound(new { message = "Job not found" });
         if (job.RecruiterId != Guid.Parse(recruiterId))
-            return Results.Forbid();
+            return ForbiddenResult("Forbidden. You do not own this job.");
 
         job.SoftDelete();
         await db.SaveChangesAsync();
