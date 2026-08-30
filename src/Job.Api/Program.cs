@@ -1,4 +1,5 @@
 using System.Text;
+using Job.Api.Endpoints;
 using Job.Api.Middleware;
 using Job.Infrastructure.Data;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -96,6 +97,9 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "job" }))
 
 app.MapGet("/", () => Results.Ok(new { service = "job", version = "0.1.0" }))
    .ExcludeFromDescription();
+
+// Job CRUD endpoints (SRS JOB-01-01 to JOB-01-05)
+app.MapJobEndpoints();
 
 // REL-01: auto-migrate on startup with fail-fast (no swallow in any environment)
 using (var scope = app.Services.CreateScope())
