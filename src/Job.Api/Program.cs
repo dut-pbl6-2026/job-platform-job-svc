@@ -1,3 +1,4 @@
+using Job.Api.Middleware;
 using Job.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -38,6 +39,8 @@ if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
+    // feat(job): add DevAuthMiddleware — dev-only header auth (no JWT needed for Postman testing)
+    app.UseMiddleware<DevAuthMiddleware>();
 }
 
 // REL-06: health check endpoint per service (6-nfr.md:REL-06, 8-system-architecture.md)
