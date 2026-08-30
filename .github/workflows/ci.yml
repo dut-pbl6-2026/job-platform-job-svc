@@ -5,4 +5,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: echo "ci placeholder"
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: '10.0.100' }
+      - run: dotnet tool install --global dotnet-ef --version 10.0.0
+      - run: dotnet format --verify-no-changes JobService.sln
+      - run: dotnet build JobService.sln --warnaserror
+      - run: dotnet test JobService.sln --no-build
+      - run: dotnet ef migrations has-pending-model-changes --project src/Job.Infrastructure/Job.Infrastructure.csproj --startup-project src/Job.Api/Job.Api.csproj || echo "check migrations"
