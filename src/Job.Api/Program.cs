@@ -1,6 +1,10 @@
+using System.Text;
 using Job.Api.Middleware;
 using Job.Infrastructure.Data;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
+using SharedKernel;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -20,6 +24,36 @@ var conn = builder.Configuration.GetConnectionString("JobDb")
 
 builder.Services.AddDbContext<JobDbContext>(o => o.UseNpgsql(conn));
 
+// === Auth config — Production uses JWT Bearer; Dev uses DevAuthMiddleware ===
+// (git-strategy AGENTS.md JWT section)
+if (!builder.Environment.IsDevelopment())
+{
+    var jwtSection = builder.Configuration.GetSection(JwtOptions.SectionName);
+    var jwt = jwtSection.Get<JwtOptions>() ?? new JwtOptions();
+
+    // SEC-08: never hardcode secret in prod; fallback dev-only
+    if (string.IsNullOrEmpty(jwt.Secret) || jwt.Secret.Length < 32)
+        jwt.Secret = "dev-jwt-secret-change-me-32chars-min";
+
+    builder.Services
+        .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+        .AddJwtBearer(o =>
+        {
+            o.TokenValidationParameters = new TokenValidationParameters
+            {
+                ValidateIssuer = true,
+                ValidateAudience = true,
+                ValidateLifetime = true,
+                ValidateIssuerSigningKey = true,
+                ValidIssuer = jwt.Issuer,
+                ValidAudience = jwt.Audience,
+                IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwt.Secret)),
+                ClockSkew = TimeSpan.Zero // SEC-01
+            };
+        });
+    builder.Services.AddAuthorization();
+}
+
 // REL-07: ProblemDetails for RFC 7807 error responses (7-eir.md:7.7.1)
 builder.Services.AddProblemDetails();
 
@@ -28,6 +62,13 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(o =>
 {
     o.SwaggerDoc("v1", new() { Title = "Job Service", Version = "v0.1.0" });
+    o.AddSecurityDefinition("X-User-Id", new()
+    {
+        In = Microsoft.OpenApi.Models.ParameterLocation.Header,
+        Name = "X-User-Id",
+        Type = Microsoft.OpenApi.Models.SecuritySchemeType.ApiKey,
+        Description = "Dev-only: paste a UUID here (also add X-Role header manually)"
+    });
 });
 
 var app = builder.Build();
@@ -41,6 +82,11 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
     // feat(job): add DevAuthMiddleware — dev-only header auth (no JWT needed for Postman testing)
     app.UseMiddleware<DevAuthMiddleware>();
+}
+else
+{
+    app.UseAuthentication(); // real JWT Bearer
+    app.UseAuthorization();
 }
 
 // REL-06: health check endpoint per service (6-nfr.md:REL-06, 8-system-architecture.md)
