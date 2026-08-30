@@ -101,6 +101,9 @@ app.MapGet("/", () => Results.Ok(new { service = "job", version = "0.1.0" }))
 // Job CRUD endpoints (SRS JOB-01-01 to JOB-01-05)
 app.MapJobEndpoints();
 
+// Category endpoints (SRS JOB-01-06)
+app.MapCategoryEndpoints();
+
 // REL-01: auto-migrate on startup with fail-fast (no swallow in any environment)
 using (var scope = app.Services.CreateScope())
 {
