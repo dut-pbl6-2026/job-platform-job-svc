@@ -85,3 +85,7 @@ docker run -p 5002:5002 --env-file .env job
 - `mise run verify` not 14 → re-run `mise run sync-env`
 
 `feature/* → main` (see `job-platform-docs/.github/git-strategy.md`).
+
+## Deploy (Render Free jp-job — TM2 Thanh)
+- Service: `jp-job` `https://jp-job.onrender.com` `5002`
+- Hook: `RENDER_DEPLOY_HOOK_JOB` → `push main` auto
