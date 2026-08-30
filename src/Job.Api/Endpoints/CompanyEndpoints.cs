@@ -11,7 +11,7 @@ namespace Job.Api.Endpoints;
 /// POST   /api/companies      — Create company (Recruiter only)
 /// GET    /api/companies      — Public list with search &amp; pagination
 /// GET    /api/companies/{id} — Public detail
-/// PUT    /api/companies/{id} — Update company (Recruiter)
+/// PUT    /api/companies/{id} — Update company (owner Recruiter only)
 /// </summary>
 public static class CompanyEndpoints
 {
@@ -28,7 +28,7 @@ public static class CompanyEndpoints
     }
 
     // Helpers: avoid Results.Forbid()/Unauthorized() which require a registered auth handler.
-    // In Development, DevAuthMiddleware is registered instead of JWT Bearer, so Forbid() would
+    // In Development, DevAuthMiddleware is used instead of JWT Bearer, so Forbid() would
     // throw InvalidOperationException. Use explicit status codes instead.
     private static IResult UnauthorizedResult() =>
         Results.Json(new { message = "Unauthorized. Missing or invalid X-User-Id." }, statusCode: 401);
@@ -38,6 +38,7 @@ public static class CompanyEndpoints
 
     /// <summary>
     /// POST /api/companies — Recruiter creates a new company profile.
+    /// Sets CreatedBy to the current recruiter's userId.
     /// Validates uniqueness of Name and TaxCode (SEC-05 EF parameterized queries).
     /// Returns 201 Created with {id, message}.
     /// </summary>
@@ -75,8 +76,8 @@ public static class CompanyEndpoints
         Company company;
         try
         {
-            company = new Company(trimmedName, dto.TaxCode);
-            // Populate optional fields via Update() to keep entity clean
+            // CreatedBy = current recruiter's userId (ownership)
+            company = new Company(trimmedName, Guid.Parse(userId), dto.TaxCode);
             company.Update(
                 trimmedName,
                 dto.TaxCode,
@@ -106,7 +107,8 @@ public static class CompanyEndpoints
 
     /// <summary>
     /// GET /api/companies?q=...&amp;page=1&amp;size=10 — public, no auth required.
-    /// Supports keyword search on Name, Industry, Address.
+    /// Uses EF.Functions.ILike (Postgres) for case-insensitive search; falls back to
+    /// .ToLower().Contains() on InMemory (unit tests) which does not support ILike.
     /// Returns paginated list of CompanyDetailDto.
     /// </summary>
     private static async Task<IResult> GetCompanies(
@@ -120,15 +122,33 @@ public static class CompanyEndpoints
         page = Math.Max(1, page);
 
         var query = db.Companies.AsQueryable();
-        var searchTerm = (q ?? search)?.Trim().ToLower();
+        var searchTerm = (q ?? search)?.Trim();
 
         if (!string.IsNullOrEmpty(searchTerm))
         {
-            query = query.Where(c =>
-                c.Name.ToLower().Contains(searchTerm) ||
-                (c.Industry != null && c.Industry.ToLower().Contains(searchTerm)) ||
-                (c.Address != null && c.Address.ToLower().Contains(searchTerm))
-            );
+            var isInMemory = db.Database.ProviderName ==
+                "Microsoft.EntityFrameworkCore.InMemory";
+
+            if (isInMemory)
+            {
+                // InMemory (unit tests) — EF.Functions.ILike not supported
+                var lower = searchTerm.ToLower();
+                query = query.Where(c =>
+                    c.Name.ToLower().Contains(lower) ||
+                    (c.Industry != null && c.Industry.ToLower().Contains(lower)) ||
+                    (c.Address != null && c.Address.ToLower().Contains(lower))
+                );
+            }
+            else
+            {
+                // Postgres — ILike uses pg_ilike index-friendly operator (SEC-05: parameterized)
+                var pattern = $"%{searchTerm}%";
+                query = query.Where(c =>
+                    EF.Functions.ILike(c.Name, pattern) ||
+                    (c.Industry != null && EF.Functions.ILike(c.Industry, pattern)) ||
+                    (c.Address != null && EF.Functions.ILike(c.Address, pattern))
+                );
+            }
         }
 
         var total = await query.CountAsync();
@@ -157,7 +177,8 @@ public static class CompanyEndpoints
     }
 
     /// <summary>
-    /// PUT /api/companies/{id} — Recruiter updates company.
+    /// PUT /api/companies/{id} — Recruiter updates company they own (CreatedBy == userId).
+    /// Returns 403 if the authenticated recruiter did not create this company.
     /// Validates uniqueness of Name and TaxCode against other companies.
     /// Returns 200 OK.
     /// </summary>
@@ -176,6 +197,10 @@ public static class CompanyEndpoints
         var company = await db.Companies.FirstOrDefaultAsync(c => c.Id == id);
         if (company is null)
             return Results.NotFound(new { message = "Company not found" });
+
+        // Ownership check — only the recruiter who created the company can update it
+        if (company.CreatedBy != Guid.Parse(userId))
+            return ForbiddenResult("Forbidden. You do not own this company.");
 
         if (string.IsNullOrWhiteSpace(dto.Name))
             return Results.ValidationProblem(new Dictionary<string, string[]>

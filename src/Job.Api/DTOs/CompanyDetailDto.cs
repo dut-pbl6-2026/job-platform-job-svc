@@ -14,6 +14,7 @@ public record CompanyDetailDto(
     string? Address,
     string? Industry,
     string? Size,
+    Guid CreatedBy,
     DateTime CreatedAt,
     DateTime UpdatedAt
 )
@@ -30,6 +31,7 @@ public record CompanyDetailDto(
         c.Address,
         c.Industry,
         c.Size,
+        c.CreatedBy,
         c.CreatedAt,
         c.UpdatedAt
     );

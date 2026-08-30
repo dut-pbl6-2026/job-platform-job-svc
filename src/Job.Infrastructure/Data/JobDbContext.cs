@@ -37,6 +37,9 @@ public class JobDbContext : DbContext
             e.Property(x => x.Address).HasMaxLength(512);
             e.Property(x => x.Industry).HasMaxLength(128);
             e.Property(x => x.Size).HasMaxLength(64);
+            // Ownership tracking — set at creation, used for PUT authorization
+            e.Property(x => x.CreatedBy).IsRequired();
+            e.HasIndex(x => x.CreatedBy);
         });
 
         b.Entity<JobPosting>(e =>

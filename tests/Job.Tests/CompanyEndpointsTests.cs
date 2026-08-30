@@ -11,11 +11,13 @@ namespace Job.Tests;
 
 /// <summary>
 /// Unit tests for Company API endpoints using In-Memory EF (no real DB needed).
-/// Tests per JOB_COMPANY_API_PLAN.md section 1.4.
+/// Tests per JOB_COMPANY_API_PLAN.md section 1.4 (updated with ownership checks).
 /// </summary>
 public class CompanyEndpointsTests : IDisposable
 {
     private readonly JobDbContext _db;
+    private readonly Guid _ownerId = Guid.NewGuid();
+    private readonly Guid _otherId = Guid.NewGuid();
 
     public CompanyEndpointsTests()
     {
@@ -30,11 +32,11 @@ public class CompanyEndpointsTests : IDisposable
 
     // ─── Helpers ────────────────────────────────────────────────────────────
 
-    private static HttpContext BuildContext(string userId, string role = "Recruiter")
+    private static HttpContext BuildContext(Guid userId, string role = "Recruiter")
     {
         var claims = new List<Claim>
         {
-            new(ClaimTypes.NameIdentifier, userId),
+            new(ClaimTypes.NameIdentifier, userId.ToString()),
             new(ClaimTypes.Role, role)
         };
         return new DefaultHttpContext
@@ -49,14 +51,13 @@ public class CompanyEndpointsTests : IDisposable
     // ─── POST /api/companies ─────────────────────────────────────────────────
 
     [Fact]
-    public async Task CreateCompany_Success_Returns201()
+    public async Task CreateCompany_Success_Returns201_AndSetsCreatedBy()
     {
         var dto = new CompanyCreateDto("TechCorp VN", "0123456789", Industry: "IT");
-        var ctx = BuildContext(Guid.NewGuid().ToString());
+        var ctx = BuildContext(_ownerId);
 
         var result = await CompanyEndpointsInvoker.CreateCompany(dto, _db, ctx);
 
-        // Results.Created returns IStatusCodeHttpResult with StatusCode=201
         var status = Assert.IsAssignableFrom<IStatusCodeHttpResult>(result);
         Assert.Equal(201, status.StatusCode);
 
@@ -64,13 +65,15 @@ public class CompanyEndpointsTests : IDisposable
         Assert.NotNull(saved);
         Assert.Equal("IT", saved!.Industry);
         Assert.Equal("0123456789", saved.TaxCode);
+        // Ownership field must be set to the recruiter who created it
+        Assert.Equal(_ownerId, saved.CreatedBy);
     }
 
     [Fact]
     public async Task CreateCompany_MissingName_Returns400()
     {
         var dto = new CompanyCreateDto("");
-        var ctx = BuildContext(Guid.NewGuid().ToString());
+        var ctx = BuildContext(_ownerId);
 
         var result = await CompanyEndpointsInvoker.CreateCompany(dto, _db, ctx);
 
@@ -81,11 +84,11 @@ public class CompanyEndpointsTests : IDisposable
     [Fact]
     public async Task CreateCompany_DuplicateName_Returns409()
     {
-        _db.Companies.Add(new Company("DuplicateCorp"));
+        _db.Companies.Add(new Company("DuplicateCorp", _ownerId));
         await _db.SaveChangesAsync();
 
         var dto = new CompanyCreateDto("DuplicateCorp");
-        var ctx = BuildContext(Guid.NewGuid().ToString());
+        var ctx = BuildContext(_ownerId);
 
         var result = await CompanyEndpointsInvoker.CreateCompany(dto, _db, ctx);
 
@@ -96,12 +99,11 @@ public class CompanyEndpointsTests : IDisposable
     [Fact]
     public async Task CreateCompany_DuplicateTaxCode_Returns409()
     {
-        var existing = new Company("ExistingCorp", "TAX-001");
-        _db.Companies.Add(existing);
+        _db.Companies.Add(new Company("ExistingCorp", _ownerId, "TAX-001"));
         await _db.SaveChangesAsync();
 
         var dto = new CompanyCreateDto("NewCorp", TaxCode: "TAX-001");
-        var ctx = BuildContext(Guid.NewGuid().ToString());
+        var ctx = BuildContext(_ownerId);
 
         var result = await CompanyEndpointsInvoker.CreateCompany(dto, _db, ctx);
 
@@ -125,7 +127,7 @@ public class CompanyEndpointsTests : IDisposable
     public async Task CreateCompany_NonRecruiter_Returns403()
     {
         var dto = new CompanyCreateDto("SomeCorp");
-        var ctx = BuildContext(Guid.NewGuid().ToString(), role: "User");
+        var ctx = BuildContext(_ownerId, role: "User");
 
         var result = await CompanyEndpointsInvoker.CreateCompany(dto, _db, ctx);
 
@@ -139,9 +141,9 @@ public class CompanyEndpointsTests : IDisposable
     public async Task GetCompanies_NoPagination_ReturnsAll()
     {
         _db.Companies.AddRange(
-            new Company("Alpha Corp"),
-            new Company("Beta Ltd"),
-            new Company("Gamma Inc")
+            new Company("Alpha Corp", _ownerId),
+            new Company("Beta Ltd", _ownerId),
+            new Company("Gamma Inc", _ownerId)
         );
         await _db.SaveChangesAsync();
 
@@ -156,12 +158,13 @@ public class CompanyEndpointsTests : IDisposable
     public async Task GetCompanies_SearchByName_FiltersCorrectly()
     {
         _db.Companies.AddRange(
-            new Company("TechViet"),
-            new Company("Finance Plus"),
-            new Company("Tech Solutions")
+            new Company("TechViet", _ownerId),
+            new Company("Finance Plus", _ownerId),
+            new Company("Tech Solutions", _ownerId)
         );
         await _db.SaveChangesAsync();
 
+        // InMemory fallback: ToLower().Contains() — ILike is Postgres-only
         var result = await CompanyEndpointsInvoker.GetCompanies(_db, q: "tech", search: null, page: 1, size: 10);
 
         var ok = Assert.IsType<Ok<PaginatedResponse<CompanyDetailDto>>>(result);
@@ -174,7 +177,7 @@ public class CompanyEndpointsTests : IDisposable
     public async Task GetCompanies_Pagination_ReturnsCorrectPage()
     {
         for (int i = 1; i <= 15; i++)
-            _db.Companies.Add(new Company($"Company {i:D2}"));
+            _db.Companies.Add(new Company($"Company {i:D2}", _ownerId));
         await _db.SaveChangesAsync();
 
         var result = await CompanyEndpointsInvoker.GetCompanies(_db, q: null, search: null, page: 2, size: 5);
@@ -191,7 +194,7 @@ public class CompanyEndpointsTests : IDisposable
     [Fact]
     public async Task GetCompanyById_ExistingId_Returns200()
     {
-        var company = new Company("DetailCorp", "TAX-999");
+        var company = new Company("DetailCorp", _ownerId, "TAX-999");
         _db.Companies.Add(company);
         await _db.SaveChangesAsync();
 
@@ -201,6 +204,7 @@ public class CompanyEndpointsTests : IDisposable
         Assert.Equal(company.Id, ok.Value!.Id);
         Assert.Equal("DetailCorp", ok.Value.Name);
         Assert.Equal("TAX-999", ok.Value.TaxCode);
+        Assert.Equal(_ownerId, ok.Value.CreatedBy);
     }
 
     [Fact]
@@ -215,14 +219,14 @@ public class CompanyEndpointsTests : IDisposable
     // ─── PUT /api/companies/{id} ─────────────────────────────────────────────
 
     [Fact]
-    public async Task UpdateCompany_Success_Returns200()
+    public async Task UpdateCompany_Owner_Returns200()
     {
-        var company = new Company("OldName", "TAX-100");
+        var company = new Company("OldName", _ownerId, "TAX-100");
         _db.Companies.Add(company);
         await _db.SaveChangesAsync();
 
         var dto = new CompanyUpdateDto("NewName", TaxCode: "TAX-200", Industry: "Finance");
-        var ctx = BuildContext(Guid.NewGuid().ToString());
+        var ctx = BuildContext(_ownerId); // same as creator
 
         var result = await CompanyEndpointsInvoker.UpdateCompany(company.Id, dto, _db, ctx);
 
@@ -232,13 +236,35 @@ public class CompanyEndpointsTests : IDisposable
         var updated = await _db.Companies.FindAsync(company.Id);
         Assert.Equal("NewName", updated!.Name);
         Assert.Equal("Finance", updated.Industry);
+        Assert.Equal(_ownerId, updated.CreatedBy); // ownership unchanged
+    }
+
+    [Fact]
+    public async Task UpdateCompany_NotOwner_Returns403()
+    {
+        // Company created by _ownerId, but _otherId tries to update
+        var company = new Company("OwnerCorp", _ownerId);
+        _db.Companies.Add(company);
+        await _db.SaveChangesAsync();
+
+        var dto = new CompanyUpdateDto("HackedName");
+        var ctx = BuildContext(_otherId); // different recruiter
+
+        var result = await CompanyEndpointsInvoker.UpdateCompany(company.Id, dto, _db, ctx);
+
+        var status = Assert.IsAssignableFrom<IStatusCodeHttpResult>(result);
+        Assert.Equal(403, status.StatusCode);
+
+        // Company should be unchanged
+        var unchanged = await _db.Companies.FindAsync(company.Id);
+        Assert.Equal("OwnerCorp", unchanged!.Name);
     }
 
     [Fact]
     public async Task UpdateCompany_NotFound_Returns404()
     {
         var dto = new CompanyUpdateDto("AnyName");
-        var ctx = BuildContext(Guid.NewGuid().ToString());
+        var ctx = BuildContext(_ownerId);
 
         var result = await CompanyEndpointsInvoker.UpdateCompany(Guid.NewGuid(), dto, _db, ctx);
 
@@ -249,13 +275,13 @@ public class CompanyEndpointsTests : IDisposable
     [Fact]
     public async Task UpdateCompany_DuplicateName_Returns409()
     {
-        var company1 = new Company("Corp A");
-        var company2 = new Company("Corp B");
+        var company1 = new Company("Corp A", _ownerId);
+        var company2 = new Company("Corp B", _ownerId);
         _db.Companies.AddRange(company1, company2);
         await _db.SaveChangesAsync();
 
         var dto = new CompanyUpdateDto("Corp A"); // conflict with company1
-        var ctx = BuildContext(Guid.NewGuid().ToString());
+        var ctx = BuildContext(_ownerId); // owns company2
 
         var result = await CompanyEndpointsInvoker.UpdateCompany(company2.Id, dto, _db, ctx);
 
@@ -266,7 +292,7 @@ public class CompanyEndpointsTests : IDisposable
     [Fact]
     public async Task UpdateCompany_Unauthenticated_Returns401()
     {
-        var company = new Company("SomeCorp");
+        var company = new Company("SomeCorp", _ownerId);
         _db.Companies.Add(company);
         await _db.SaveChangesAsync();
 
@@ -284,7 +310,7 @@ public class CompanyEndpointsTests : IDisposable
     [Fact]
     public void CompanyDetailDto_From_MapsAllFields()
     {
-        var company = new Company("MapCorp", "TAX-MAP");
+        var company = new Company("MapCorp", _ownerId, "TAX-MAP");
         company.Update("MapCorp", "TAX-MAP", "https://logo.png", "https://map.co",
             "A description", "123 Street", "Technology", "50-200");
 
@@ -298,6 +324,7 @@ public class CompanyEndpointsTests : IDisposable
         Assert.Equal("123 Street", dto.Address);
         Assert.Equal("Technology", dto.Industry);
         Assert.Equal("50-200", dto.Size);
+        Assert.Equal(_ownerId, dto.CreatedBy);
         Assert.False(dto.Verified); // default
     }
 }

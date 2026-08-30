@@ -14,12 +14,18 @@ public class Company : Entity
     public string? Industry { get; private set; }
     public string? Size { get; private set; }
 
+    /// <summary>The Recruiter who created this company profile (set once at creation, immutable).</summary>
+    public Guid CreatedBy { get; private set; }
+
     private Company() { }
 
-    public Company(string name, string? taxCode = null)
+    public Company(string name, Guid createdBy, string? taxCode = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name, nameof(name));
+        if (createdBy == Guid.Empty)
+            throw new ArgumentException("CreatedBy cannot be empty.", nameof(createdBy));
         Name = name.Trim();
+        CreatedBy = createdBy;
         TaxCode = NormalizeOptional(taxCode);
     }
 

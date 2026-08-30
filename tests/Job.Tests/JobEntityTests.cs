@@ -141,23 +141,38 @@ public class CategoryEntityTests
 
 public class CompanyEntityTests
 {
+    private readonly Guid _owner = Guid.NewGuid();
+
     [Fact]
     public void Ctor_ThrowsWhenNameEmpty()
     {
-        Assert.Throws<ArgumentException>(() => new Company(""));
+        Assert.Throws<ArgumentException>(() => new Company("", _owner));
+    }
+
+    [Fact]
+    public void Ctor_ThrowsWhenCreatedByEmpty()
+    {
+        Assert.Throws<ArgumentException>(() => new Company("Corp", Guid.Empty));
     }
 
     [Fact]
     public void Ctor_TrimsName()
     {
-        var company = new Company("  Acme Corp  ");
+        var company = new Company("  Acme Corp  ", _owner);
         Assert.Equal("Acme Corp", company.Name);
+    }
+
+    [Fact]
+    public void Ctor_SetsCreatedBy()
+    {
+        var company = new Company("Acme Corp", _owner);
+        Assert.Equal(_owner, company.CreatedBy);
     }
 
     [Fact]
     public void Update_ThrowsWhenNameWhitespace()
     {
-        var company = new Company("Acme Corp");
+        var company = new Company("Acme Corp", _owner);
         Assert.Throws<ArgumentException>(() =>
             company.Update("  ", null, null, null, null, null, null, null));
     }
