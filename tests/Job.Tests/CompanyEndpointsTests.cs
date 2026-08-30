@@ -124,6 +124,26 @@ public class CompanyEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task CreateCompany_InvalidGuidUserId_Returns401()
+    {
+        var dto = new CompanyCreateDto("SomeCorp");
+        var claims = new List<Claim>
+        {
+            new(ClaimTypes.NameIdentifier, "invalid-guid"),
+            new(ClaimTypes.Role, "Recruiter")
+        };
+        var ctx = new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity(claims, "Test"))
+        };
+
+        var result = await CompanyEndpointsInvoker.CreateCompany(dto, _db, ctx);
+
+        var status = Assert.IsAssignableFrom<IStatusCodeHttpResult>(result);
+        Assert.Equal(401, status.StatusCode);
+    }
+
+    [Fact]
     public async Task CreateCompany_NonRecruiter_Returns403()
     {
         var dto = new CompanyCreateDto("SomeCorp");

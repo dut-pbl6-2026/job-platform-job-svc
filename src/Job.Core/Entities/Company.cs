@@ -19,7 +19,16 @@ public class Company : Entity
 
     private Company() { }
 
-    public Company(string name, Guid createdBy, string? taxCode = null)
+    public Company(
+        string name,
+        Guid createdBy,
+        string? taxCode = null,
+        string? logoUrl = null,
+        string? website = null,
+        string? description = null,
+        string? address = null,
+        string? industry = null,
+        string? size = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name, nameof(name));
         if (createdBy == Guid.Empty)
@@ -27,6 +36,12 @@ public class Company : Entity
         Name = name.Trim();
         CreatedBy = createdBy;
         TaxCode = NormalizeOptional(taxCode);
+        LogoUrl = NormalizeOptional(logoUrl);
+        Website = NormalizeOptional(website);
+        Description = NormalizeOptional(description);
+        Address = NormalizeOptional(address);
+        Industry = NormalizeOptional(industry);
+        Size = NormalizeOptional(size);
     }
 
     public void Update(

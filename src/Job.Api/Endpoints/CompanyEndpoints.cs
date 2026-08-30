@@ -19,10 +19,35 @@ public static class CompanyEndpoints
     {
         var group = app.MapGroup("/api/companies").WithTags("Companies");
 
-        group.MapPost("/", CreateCompany);
-        group.MapGet("/", GetCompanies);
-        group.MapGet("/{id:guid}", GetCompanyById);
-        group.MapPut("/{id:guid}", UpdateCompany);
+        group.MapPost("/", CreateCompany)
+            .WithName("CreateCompany")
+            .WithSummary("Create a new company profile (Recruiter only)")
+            .Produces(StatusCodes.Status201Created)
+            .ProducesValidationProblem(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status401Unauthorized)
+            .Produces(StatusCodes.Status403Forbidden)
+            .Produces(StatusCodes.Status409Conflict);
+
+        group.MapGet("/", GetCompanies)
+            .WithName("GetCompanies")
+            .WithSummary("List companies with search and pagination (Public)")
+            .Produces<PaginatedResponse<CompanyDetailDto>>(StatusCodes.Status200OK);
+
+        group.MapGet("/{id:guid}", GetCompanyById)
+            .WithName("GetCompanyById")
+            .WithSummary("Get company detail by ID (Public)")
+            .Produces<CompanyDetailDto>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status404NotFound);
+
+        group.MapPut("/{id:guid}", UpdateCompany)
+            .WithName("UpdateCompany")
+            .WithSummary("Update company profile (Owner Recruiter only)")
+            .Produces(StatusCodes.Status200OK)
+            .ProducesValidationProblem(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status401Unauthorized)
+            .Produces(StatusCodes.Status403Forbidden)
+            .Produces(StatusCodes.Status404NotFound)
+            .Produces(StatusCodes.Status409Conflict);
 
         return app;
     }
@@ -77,9 +102,9 @@ public static class CompanyEndpoints
         try
         {
             // CreatedBy = current recruiter's userId (ownership)
-            company = new Company(trimmedName, Guid.Parse(userId), dto.TaxCode);
-            company.Update(
+            company = new Company(
                 trimmedName,
+                userId.Value,
                 dto.TaxCode,
                 dto.LogoUrl,
                 dto.Website,
@@ -121,7 +146,7 @@ public static class CompanyEndpoints
         size = Math.Clamp(size, 1, 100);
         page = Math.Max(1, page);
 
-        var query = db.Companies.AsQueryable();
+        var query = db.Companies.AsNoTracking();
         var searchTerm = (q ?? search)?.Trim();
 
         if (!string.IsNullOrEmpty(searchTerm))
@@ -169,7 +194,7 @@ public static class CompanyEndpoints
     /// </summary>
     private static async Task<IResult> GetCompanyById(Guid id, JobDbContext db)
     {
-        var company = await db.Companies.FirstOrDefaultAsync(c => c.Id == id);
+        var company = await db.Companies.AsNoTracking().FirstOrDefaultAsync(c => c.Id == id);
         if (company is null)
             return Results.NotFound(new { message = "Company not found" });
 
@@ -199,7 +224,7 @@ public static class CompanyEndpoints
             return Results.NotFound(new { message = "Company not found" });
 
         // Ownership check — only the recruiter who created the company can update it
-        if (company.CreatedBy != Guid.Parse(userId))
+        if (company.CreatedBy != userId.Value)
             return ForbiddenResult("Forbidden. You do not own this company.");
 
         if (string.IsNullOrWhiteSpace(dto.Name))
@@ -245,10 +270,12 @@ public static class CompanyEndpoints
         return Results.Ok(new { message = "Company updated successfully" });
     }
 
-    private static (string? userId, string? role) GetIdentity(HttpContext ctx)
+    private static (Guid? userId, string? role) GetIdentity(HttpContext ctx)
     {
-        var userId = ctx.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        var rawUserId = ctx.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
         var role = ctx.User.FindFirst(ClaimTypes.Role)?.Value;
+        if (rawUserId is null || !Guid.TryParse(rawUserId, out var userId))
+            return (null, role);
         return (userId, role);
     }
 }

@@ -170,6 +170,33 @@ public class CompanyEntityTests
     }
 
     [Fact]
+    public void Ctor_SetsAllOptionalFields()
+    {
+        var company = new Company(
+            "Acme Corp",
+            _owner,
+            taxCode: "TAX-123",
+            logoUrl: "https://logo.png",
+            website: "https://acme.com",
+            description: "A description",
+            address: "123 Street",
+            industry: "Technology",
+            size: "50-200"
+        );
+
+        Assert.Equal("Acme Corp", company.Name);
+        Assert.Equal(_owner, company.CreatedBy);
+        Assert.Equal("TAX-123", company.TaxCode);
+        Assert.Equal("https://logo.png", company.LogoUrl);
+        Assert.Equal("https://acme.com", company.Website);
+        Assert.Equal("A description", company.Description);
+        Assert.Equal("123 Street", company.Address);
+        Assert.Equal("Technology", company.Industry);
+        Assert.Equal("50-200", company.Size);
+        Assert.False(company.Verified);
+    }
+
+    [Fact]
     public void Update_ThrowsWhenNameWhitespace()
     {
         var company = new Company("Acme Corp", _owner);
