@@ -11,10 +11,10 @@ namespace Job.Infrastructure.Data.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.DropColumn(
-                name: "SavedAt",
-                table: "SavedJobs");
-
+            // Fresh DB (job_platform_job is empty in all 6 pbl6-* PG envs) — no existing
+            // Companies rows, so the Guid.Empty default is inert. It only guards retrofits.
+            // CreatedBy is always set by the API (POST /api/companies, Recruiter identity),
+            // so no real-recruiter backfill is required here.
             migrationBuilder.AddColumn<Guid>(
                 name: "CreatedBy",
                 table: "Companies",
@@ -38,13 +38,6 @@ namespace Job.Infrastructure.Data.Migrations
             migrationBuilder.DropColumn(
                 name: "CreatedBy",
                 table: "Companies");
-
-            migrationBuilder.AddColumn<DateTime>(
-                name: "SavedAt",
-                table: "SavedJobs",
-                type: "timestamp with time zone",
-                nullable: false,
-                defaultValue: new DateTime(1, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified));
         }
     }
 }

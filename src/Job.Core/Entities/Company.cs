@@ -4,6 +4,16 @@ namespace Job.Core.Entities;
 
 public class Company : Entity
 {
+    // Column length limits — mirror JobDbContext fluent config and guard POST/PUT DTOs
+    // against Npgsql 22001 (value too long) → 500 (returns 400 ValidationProblem instead).
+    public const int NameMaxLength = 256;
+    public const int TaxCodeMaxLength = 20;
+    public const int LogoUrlMaxLength = 2048;
+    public const int WebsiteMaxLength = 2048;
+    public const int AddressMaxLength = 512;
+    public const int IndustryMaxLength = 128;
+    public const int SizeMaxLength = 64;
+
     public string Name { get; private set; } = "";
     public string? TaxCode { get; private set; }
     public bool Verified { get; private set; }
@@ -14,7 +24,11 @@ public class Company : Entity
     public string? Industry { get; private set; }
     public string? Size { get; private set; }
 
-    /// <summary>The Recruiter who created this company profile (set once at creation, immutable).</summary>
+    /// <summary>
+    /// The Recruiter who created this company profile (set once at creation, immutable).
+    /// SRS extension: Company in 3-must-have-fr.md:87 / 10-appendices.md:269 is declared with
+    /// `created_by FK → users.id` to support owner-only PUT /api/companies/{id} (US-07b).
+    /// </summary>
     public Guid CreatedBy { get; private set; }
 
     private Company() { }

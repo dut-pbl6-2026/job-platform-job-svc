@@ -155,6 +155,30 @@ public class CompanyEndpointsTests : IDisposable
         Assert.Equal(403, status.StatusCode);
     }
 
+    [Fact]
+    public async Task CreateCompany_NameTooLong_Returns400()
+    {
+        var dto = new CompanyCreateDto(new string('A', 257)); // > Company.NameMaxLength (256)
+        var ctx = BuildContext(_ownerId);
+
+        var result = await CompanyEndpointsInvoker.CreateCompany(dto, _db, ctx);
+
+        var status = Assert.IsAssignableFrom<IStatusCodeHttpResult>(result);
+        Assert.Equal(400, status.StatusCode);
+    }
+
+    [Fact]
+    public async Task CreateCompany_TaxCodeTooLong_Returns400()
+    {
+        var dto = new CompanyCreateDto("ValidCorp", TaxCode: new string('1', 21)); // > TaxCodeMaxLength (20)
+        var ctx = BuildContext(_ownerId);
+
+        var result = await CompanyEndpointsInvoker.CreateCompany(dto, _db, ctx);
+
+        var status = Assert.IsAssignableFrom<IStatusCodeHttpResult>(result);
+        Assert.Equal(400, status.StatusCode);
+    }
+
     // ─── GET /api/companies ─────────────────────────────────────────────────
 
     [Fact]
@@ -323,6 +347,26 @@ public class CompanyEndpointsTests : IDisposable
 
         var status = Assert.IsAssignableFrom<IStatusCodeHttpResult>(result);
         Assert.Equal(401, status.StatusCode);
+    }
+
+    [Fact]
+    public async Task UpdateCompany_NameTooLong_Returns400()
+    {
+        var company = new Company("SomeCorp", _ownerId);
+        _db.Companies.Add(company);
+        await _db.SaveChangesAsync();
+
+        var dto = new CompanyUpdateDto(new string('A', 257)); // > Company.NameMaxLength (256)
+        var ctx = BuildContext(_ownerId);
+
+        var result = await CompanyEndpointsInvoker.UpdateCompany(company.Id, dto, _db, ctx);
+
+        var status = Assert.IsAssignableFrom<IStatusCodeHttpResult>(result);
+        Assert.Equal(400, status.StatusCode);
+
+        // Company unchanged
+        var unchanged = await _db.Companies.FindAsync(company.Id);
+        Assert.Equal("SomeCorp", unchanged!.Name);
     }
 
     // ─── DTO mapping ─────────────────────────────────────────────────────────

@@ -29,14 +29,14 @@ public class JobDbContext : DbContext
             e.HasKey(x => x.Id);
             e.HasIndex(x => x.Name).IsUnique();
             e.HasIndex(x => x.TaxCode).IsUnique().HasFilter("\"TaxCode\" IS NOT NULL");
-            e.Property(x => x.Name).HasMaxLength(256).IsRequired();
-            e.Property(x => x.TaxCode).HasMaxLength(20);
+            e.Property(x => x.Name).HasMaxLength(Company.NameMaxLength).IsRequired();
+            e.Property(x => x.TaxCode).HasMaxLength(Company.TaxCodeMaxLength);
             e.Property(x => x.Verified).HasDefaultValue(false);
-            e.Property(x => x.LogoUrl).HasMaxLength(2048);
-            e.Property(x => x.Website).HasMaxLength(2048);
-            e.Property(x => x.Address).HasMaxLength(512);
-            e.Property(x => x.Industry).HasMaxLength(128);
-            e.Property(x => x.Size).HasMaxLength(64);
+            e.Property(x => x.LogoUrl).HasMaxLength(Company.LogoUrlMaxLength);
+            e.Property(x => x.Website).HasMaxLength(Company.WebsiteMaxLength);
+            e.Property(x => x.Address).HasMaxLength(Company.AddressMaxLength);
+            e.Property(x => x.Industry).HasMaxLength(Company.IndustryMaxLength);
+            e.Property(x => x.Size).HasMaxLength(Company.SizeMaxLength);
             // Ownership tracking — set at creation, used for PUT authorization
             e.Property(x => x.CreatedBy).IsRequired();
             e.HasIndex(x => x.CreatedBy);

@@ -56,10 +56,51 @@ public static class CompanyEndpoints
     // In Development, DevAuthMiddleware is used instead of JWT Bearer, so Forbid() would
     // throw InvalidOperationException. Use explicit status codes instead.
     private static IResult UnauthorizedResult() =>
-        Results.Json(new { message = "Unauthorized. Missing or invalid X-User-Id." }, statusCode: 401);
+        Results.Json(new { message = "Unauthorized. Missing or invalid user identity." }, statusCode: 401);
 
     private static IResult ForbiddenResult(string message = "Forbidden. Recruiter role required.") =>
         Results.Json(new { message }, statusCode: 403);
+
+    /// <summary>
+    /// Validates company fields (required + column length) so oversized input returns
+    /// 400 ValidationProblem instead of an unhandled Npgsql 22001 → 500. Lengths mirror
+    /// Company domain consts / JobDbContext fluent config.
+    /// </summary>
+    private static IResult? ValidateCompanyFields(
+        string name,
+        string? taxCode,
+        string? logoUrl,
+        string? website,
+        string? address,
+        string? industry,
+        string? size)
+    {
+        var errors = new Dictionary<string, string[]>();
+
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            errors["name"] = ["Company name is required."];
+        }
+        else if (name.Trim().Length > Company.NameMaxLength)
+        {
+            errors["name"] = [$"Company name must not exceed {Company.NameMaxLength} characters."];
+        }
+
+        CheckLength(errors, "taxCode", taxCode, Company.TaxCodeMaxLength);
+        CheckLength(errors, "logoUrl", logoUrl, Company.LogoUrlMaxLength);
+        CheckLength(errors, "website", website, Company.WebsiteMaxLength);
+        CheckLength(errors, "address", address, Company.AddressMaxLength);
+        CheckLength(errors, "industry", industry, Company.IndustryMaxLength);
+        CheckLength(errors, "size", size, Company.SizeMaxLength);
+
+        return errors.Count == 0 ? null : Results.ValidationProblem(errors);
+    }
+
+    private static void CheckLength(Dictionary<string, string[]> errors, string field, string? value, int max)
+    {
+        if (!string.IsNullOrWhiteSpace(value) && value.Trim().Length > max)
+            errors[field] = [$"{field} must not exceed {max} characters."];
+    }
 
     /// <summary>
     /// POST /api/companies — Recruiter creates a new company profile.
@@ -78,9 +119,11 @@ public static class CompanyEndpoints
         if (role != "Recruiter")
             return ForbiddenResult();
 
-        if (string.IsNullOrWhiteSpace(dto.Name))
-            return Results.ValidationProblem(new Dictionary<string, string[]>
-            { ["name"] = ["Company name is required."] });
+        var fieldErrors = ValidateCompanyFields(
+            dto.Name, dto.TaxCode, dto.LogoUrl, dto.Website,
+            dto.Address, dto.Industry, dto.Size);
+        if (fieldErrors is not null)
+            return fieldErrors;
 
         var trimmedName = dto.Name.Trim();
 
@@ -166,12 +209,17 @@ public static class CompanyEndpoints
             }
             else
             {
-                // Postgres — ILike uses pg_ilike index-friendly operator (SEC-05: parameterized)
-                var pattern = $"%{searchTerm}%";
+                // Postgres — ILike uses pg_ilike index-friendly operator (SEC-05: parameterized).
+                // Escape % _ \ so user input behaves literally (no accidental wildcard injection).
+                var escaped = searchTerm
+                    .Replace("\\", "\\\\")
+                    .Replace("%", "\\%")
+                    .Replace("_", "\\_");
+                var pattern = $"%{escaped}%";
                 query = query.Where(c =>
-                    EF.Functions.ILike(c.Name, pattern) ||
-                    (c.Industry != null && EF.Functions.ILike(c.Industry, pattern)) ||
-                    (c.Address != null && EF.Functions.ILike(c.Address, pattern))
+                    EF.Functions.ILike(c.Name, pattern, "\\") ||
+                    (c.Industry != null && EF.Functions.ILike(c.Industry, pattern, "\\")) ||
+                    (c.Address != null && EF.Functions.ILike(c.Address, pattern, "\\"))
                 );
             }
         }
@@ -227,9 +275,11 @@ public static class CompanyEndpoints
         if (company.CreatedBy != userId.Value)
             return ForbiddenResult("Forbidden. You do not own this company.");
 
-        if (string.IsNullOrWhiteSpace(dto.Name))
-            return Results.ValidationProblem(new Dictionary<string, string[]>
-            { ["name"] = ["Company name is required."] });
+        var fieldErrors = ValidateCompanyFields(
+            dto.Name, dto.TaxCode, dto.LogoUrl, dto.Website,
+            dto.Address, dto.Industry, dto.Size);
+        if (fieldErrors is not null)
+            return fieldErrors;
 
         var trimmedName = dto.Name.Trim();
 
