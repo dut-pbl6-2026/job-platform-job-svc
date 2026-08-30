@@ -41,12 +41,50 @@ Dependency: `Api → Infrastructure → Core → SharedKernel` (`PackageReferenc
 - `GET /api/categories` list categories (no auth required). Predefined: IT, Finance, Marketing, Healthcare, Education, Engineering, Sales, Hospitality, Others.
 - Gateway `GW-01` routes `/api/jobs/*` → Job Service, validates JWT then forwards `X-User-Id/Role`.
 
+## JWT (SharedKernel JwtOptions)
+
+Gateway validates JWT before forwarding `X-User-Id` / `X-User-Role` headers. Job service **does not** validate JWT directly — it trusts gateway-injected headers. When reading identity: `context.Request.Headers["X-User-Id"]` → `Guid.Parse(...)`. Validate non-empty headers on every protected endpoint. Fallback dev secret: **never** hardcode; read from `JWT_SECRET` env var (see AGENTS.md no-hard-code table).
+
+Validate in `Program.cs` (when JWT Bearer is added in W2): `ValidateIssuer=true Audience=job-platform ClockSkew=Zero`. Reference: `shared/JwtOptions.cs SectionName=Jwt`.
+
+## Security (SRS 6 `SEC-*`)
+
+- `SEC-05 SQLi` — always use EF Core parameterized queries (`FromSql` with interpolation or `SqlParameter`), never raw string concat.
+- `SEC-05 CSRF` — API is stateless JWT; no form-based auth, CSRF N/A. Validate `Content-Type: application/json` on POST/PUT.
+- `SEC-06 rate limit` — 100 req/min per IP+user via gateway (GW-01); no local rate limit needed in W1.
+- `SEC-10 CORS` — trusted origins enforced by gateway; no CORS config in job-svc.
+
+## Reliability (NFR `REL-01`)
+
+- Retry 3× with exponential backoff on transient DB errors (Polly or EF resilience strategy — add in W2 with Kafka).
+- DB pooling: `MaxPoolSize=20` via connection string env (`DATABASE_URL_JOB`), not hardcoded.
+- Fail-fast on startup migrate failure (`Program.cs`): always `throw` — unmigrated DB → all requests 500.
+
 ## Data — EF Core (NFR `6-nfr.md:MAINT`)
 
 - `JobDbContext: DbSet<Job,Category,Company,SavedJob>` `UseNpgsql(ConnectionStrings:JobDb / DATABASE_URL_JOB)`.
-- Fluent: `Category Name unique 128 required Description`, `Company Name unique 256 TaxCode unique nullable Verified default false LogoUrl Website Description Address Industry Size`, `Job Title 256 required Description required CompanyId FK LocationFK SalaryMin SalaryMax SalaryCurrency CategoryId FK Requirements Benefits EmploymentType 64 ExperienceLevel 64 RecruiterId Status 32 default Active ViewCount default 0`, `SavedJob UserId JobId FK SavedAt`.
+- Fluent: `Category Name unique 128 required Description`, `Company Name unique 256 TaxCode unique nullable Verified default false LogoUrl Website Description Address Industry Size`, `Job Title 256 required Description required CompanyId FK Location SalaryMin SalaryMax SalaryCurrency CategoryId FK Requirements Benefits EmploymentType 64 ExperienceLevel 64 RecruiterId Status(JobStatus enum → string 32) HasQueryFilter(Status!=Deleted) ViewCount default 0`, `SavedJob UserId JobId FK` (SRS `saved_at` = `Entity.CreatedAt`, no extra column).
 - Migrations `src/Job.Infrastructure/Data/Migrations/` — `mise run ef-check` in PR+CI, auto-migrate on startup with `ILogger`.
 - Seed predefined categories on startup (IT, Finance, Marketing, Healthcare, Education, Engineering, Sales, Hospitality, Others).
+
+## API Response Standards (7-eir.md:7.7)
+
+**HTTP status codes** (7-eir.md:7.7.1): `200 OK` list/detail | `201 Created` POST | `204 No Content` DELETE | `400 Bad Request` invalid input | `401 Unauthorized` bad/missing token | `403 Forbidden` wrong role | `404 Not Found` | `409 Conflict` duplicate | `422 Unprocessable Entity` validation | `429 Too Many Requests` rate limit | `500 Internal Server Error`.
+
+**Error response format** (7-eir.md:7.7.2) — `ProblemDetails` + `UseExceptionHandler()` in `Program.cs` produces RFC 7807 JSON automatically:
+
+```json
+{
+  "status": 400,
+  "timestamp": "2026-08-17T10:30:00Z",
+  "error": "Bad Request",
+  "message": "Title is required",
+  "path": "/api/jobs",
+  "details": { "field": "title", "issue": "Title cannot be empty" }
+}
+```
+
+For W2 `feat/job-crud-api`: extend `ProblemDetails` with `timestamp` + `path` + `details` via `IProblemDetailsService` or a custom `ExceptionHandler` middleware.
 
 ## Events (SRS 8.5)
 
@@ -94,4 +132,21 @@ mise run ef-check
 mise run run  # http://localhost:5002/health → {"status":"ok","service":"job"}
 ```
 
-`feature/* → main` (e.g., `feature/job-crud-category`), PR must: Description/How to verify/Checklist `mise run build/test/format/ef-check`.
+## Git convention (git-strategy.md)
+
+Branch: `feature/<description>` | `bugfix/<description>` | `hotfix/v<semver>-<desc>` → `main`.
+
+Commits — `<type>(job): <subject>` (scope always `job` for this repo):
+
+| Type | Example |
+|------|---------|
+| `feat` | `feat(job): add POST /api/jobs endpoint` |
+| `fix` | `fix(job): guard null before Trim in Job ctor` |
+| `refactor` | `refactor(job): introduce JobStatus enum` |
+| `test` | `test(job): add salary range validation tests` |
+| `docs` | `docs(job): update README prerequisites` |
+| `chore` | `chore(job): remove unused packages from csproj` |
+| `ci` | `ci(job): replace ci placeholder with real steps` |
+
+PR checklist: Description / How to verify / Checklist `mise run build/test/format/ef-check`.
+

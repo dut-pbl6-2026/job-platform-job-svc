@@ -7,8 +7,6 @@
   <ItemGroup>
     <ProjectReference Include="../Job.Core/Job.Core.csproj" />
     <ProjectReference Include="../Job.Infrastructure/Job.Infrastructure.csproj" />
-  </ItemGroup>
-  <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.4">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>

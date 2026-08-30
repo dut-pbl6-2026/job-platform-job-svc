@@ -42,6 +42,16 @@ public class JobDbContext : DbContext
         b.Entity<JobPosting>(e =>
         {
             e.HasKey(x => x.Id);
+
+            // M6: use enum stored as string (readable in DB), max 32 chars
+            e.Property(x => x.Status)
+                .HasConversion<string>()
+                .HasMaxLength(32)
+                .HasDefaultValue(JobStatus.Active);
+
+            // A2: global query filter — hide Deleted jobs by default (JOB-01-05)
+            e.HasQueryFilter(x => x.Status != JobStatus.Deleted);
+
             e.Property(x => x.Title).HasMaxLength(256).IsRequired();
             e.Property(x => x.Description).IsRequired();
             e.Property(x => x.Location).HasMaxLength(256);
@@ -50,7 +60,6 @@ public class JobDbContext : DbContext
             e.Property(x => x.SalaryCurrency).HasMaxLength(3).HasDefaultValue("VND");
             e.Property(x => x.EmploymentType).HasMaxLength(64).HasDefaultValue("FullTime");
             e.Property(x => x.ExperienceLevel).HasMaxLength(64).HasDefaultValue("Entry");
-            e.Property(x => x.Status).HasMaxLength(32).HasDefaultValue("Active");
             e.Property(x => x.ViewCount).HasDefaultValue(0);
             e.HasOne(x => x.Company)
                 .WithMany()

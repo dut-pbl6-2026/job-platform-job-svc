@@ -19,7 +19,7 @@ public class Job : Entity
     public string EmploymentType { get; private set; } = "FullTime";
     public string ExperienceLevel { get; private set; } = "Entry";
     public Guid RecruiterId { get; private set; }
-    public string Status { get; private set; } = "Active";
+    public JobStatus Status { get; private set; } = JobStatus.Active;
     public int ViewCount { get; private set; }
 
     private Job() { }
@@ -39,6 +39,16 @@ public class Job : Entity
         string employmentType = "FullTime",
         string experienceLevel = "Entry")
     {
+        // M1: guard against null before Trim
+        ArgumentException.ThrowIfNullOrWhiteSpace(title, nameof(title));
+        ArgumentException.ThrowIfNullOrWhiteSpace(description, nameof(description));
+        ArgumentException.ThrowIfNullOrWhiteSpace(location, nameof(location));
+        ArgumentException.ThrowIfNullOrWhiteSpace(employmentType, nameof(employmentType));
+        ArgumentException.ThrowIfNullOrWhiteSpace(experienceLevel, nameof(experienceLevel));
+
+        // M3: salary range validation
+        ValidateSalaryRange(salaryMin, salaryMax);
+
         Title = title.Trim();
         Description = description.Trim();
         CompanyId = companyId;
@@ -68,6 +78,16 @@ public class Job : Entity
         string employmentType,
         string experienceLevel)
     {
+        // M1: guard against null before Trim
+        ArgumentException.ThrowIfNullOrWhiteSpace(title, nameof(title));
+        ArgumentException.ThrowIfNullOrWhiteSpace(description, nameof(description));
+        ArgumentException.ThrowIfNullOrWhiteSpace(location, nameof(location));
+        ArgumentException.ThrowIfNullOrWhiteSpace(employmentType, nameof(employmentType));
+        ArgumentException.ThrowIfNullOrWhiteSpace(experienceLevel, nameof(experienceLevel));
+
+        // M3: salary range validation
+        ValidateSalaryRange(salaryMin, salaryMax);
+
         Title = title.Trim();
         Description = description.Trim();
         CompanyId = companyId;
@@ -85,19 +105,19 @@ public class Job : Entity
 
     public void Close()
     {
-        Status = "Closed";
+        Status = JobStatus.Closed;
         Touch();
     }
 
     public void Reopen()
     {
-        Status = "Active";
+        Status = JobStatus.Active;
         Touch();
     }
 
     public void SoftDelete()
     {
-        Status = "Deleted";
+        Status = JobStatus.Deleted;
         Touch();
     }
 
@@ -106,10 +126,23 @@ public class Job : Entity
         ViewCount++;
     }
 
-    private static string NormalizeCurrency(string value)
+    // M2: fix NormalizeCurrency — check null/whitespace before Trim
+    private static string NormalizeCurrency(string? value)
     {
+        if (string.IsNullOrWhiteSpace(value)) return "VND";
         var trimmed = value.Trim().ToUpperInvariant();
         return string.IsNullOrWhiteSpace(trimmed) ? "VND" : trimmed;
+    }
+
+    // M3: salary range guard — both non-negative and min <= max
+    private static void ValidateSalaryRange(decimal? salaryMin, decimal? salaryMax)
+    {
+        if (salaryMin.HasValue && salaryMin.Value < 0)
+            throw new ArgumentOutOfRangeException(nameof(salaryMin), "SalaryMin must be >= 0.");
+        if (salaryMax.HasValue && salaryMax.Value < 0)
+            throw new ArgumentOutOfRangeException(nameof(salaryMax), "SalaryMax must be >= 0.");
+        if (salaryMin.HasValue && salaryMax.HasValue && salaryMin.Value > salaryMax.Value)
+            throw new ArgumentException("SalaryMin must be <= SalaryMax.", nameof(salaryMin));
     }
 
     private static string? NormalizeOptional(string? value)

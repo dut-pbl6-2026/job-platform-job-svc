@@ -13,6 +13,7 @@ public class Category : Entity
 
     public Category(string name, string? description = null)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name, nameof(name));
         Name = name.Trim();
         Description = description?.Trim();
     }
@@ -31,6 +32,7 @@ public class Category : Entity
 
     public void Update(string name, string? description)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name, nameof(name));
         Name = name.Trim();
         Description = description?.Trim();
         Touch();

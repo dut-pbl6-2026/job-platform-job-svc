@@ -20,17 +20,30 @@ public static class SeedData
 
     public static async Task SeedCategoriesAsync(JobDbContext db, CancellationToken cancellationToken = default)
     {
+        // M5: Use OrdinalIgnoreCase to align with case-insensitive intent;
+        // Postgres unique index is case-sensitive — consider citext or lower() index long-term.
         var existingNames = await db.Categories
             .Select(x => x.Name)
             .ToListAsync(cancellationToken);
         var existingNameSet = existingNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var category in Categories.Where(x => !existingNameSet.Contains(x.Name)))
+        var toAdd = Categories.Where(x => !existingNameSet.Contains(x.Name)).ToList();
+        if (toAdd.Count == 0) return;
+
+        foreach (var category in toAdd)
         {
             db.Categories.Add(Category.Seed(category.Id, category.Name, category.Description));
         }
 
-        await db.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException)
+        {
+            // A5: Race condition — second pod hit unique constraint. Safe to ignore;
+            // the category was already inserted by the first pod.
+        }
     }
 
     private sealed record SeedCategory(Guid Id, string Name, string Description);

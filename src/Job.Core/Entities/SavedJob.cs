@@ -7,7 +7,11 @@ public class SavedJob : Entity
     public Guid UserId { get; private set; }
     public Guid JobId { get; private set; }
     public Job? Job { get; private set; }
-    public DateTime SavedAt { get; private set; } = DateTime.UtcNow;
+
+    // A3: SavedAt maps to Entity.CreatedAt — no extra column.
+    // SRS 3.3.4 data model specifies saved_at; we surface it via this property
+    // so the API can return it without a redundant DB column.
+    public DateTime SavedAt => CreatedAt;
 
     private SavedJob() { }
 

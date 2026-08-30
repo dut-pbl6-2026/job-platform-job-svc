@@ -18,6 +18,7 @@ public class Company : Entity
 
     public Company(string name, string? taxCode = null)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name, nameof(name));
         Name = name.Trim();
         TaxCode = NormalizeOptional(taxCode);
     }
@@ -32,6 +33,7 @@ public class Company : Entity
         string? industry,
         string? size)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name, nameof(name));
         Name = name.Trim();
         TaxCode = NormalizeOptional(taxCode);
         LogoUrl = NormalizeOptional(logoUrl);
