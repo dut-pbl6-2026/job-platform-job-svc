@@ -1,4 +1,4 @@
-using System.Security.Claims;
+using Job.Api.Auth;
 using Job.Api.DTOs;
 using Job.Core.Entities;
 using Job.Infrastructure.Data;
@@ -8,11 +8,14 @@ using Npgsql;
 namespace Job.Api.Endpoints;
 
 /// <summary>
-/// Company CRUD endpoints per SRS D.1 line 220-222 and JOB-01.
+/// Company endpoints per SRS D.1 lines 220-223 and JOB-01.
 /// POST   /api/companies      — Create company (Recruiter only)
 /// GET    /api/companies      — Public list with search &amp; pagination
 /// GET    /api/companies/{id} — Public detail
 /// PUT    /api/companies/{id} — Update company (owner Recruiter only)
+/// NOTE: no DELETE /api/companies/{id} by design — SRS D.1 defines POST/GET/GET/PUT
+/// only for companies, and Jobs.CompanyId FK uses Restrict (a referenced company
+/// cannot be removed). If deletion is ever required, add soft-delete first.
 /// </summary>
 public static class CompanyEndpoints
 {
@@ -114,7 +117,7 @@ public static class CompanyEndpoints
         JobDbContext db,
         HttpContext ctx)
     {
-        var (userId, role) = GetIdentity(ctx);
+        var (userId, role) = IdentityHelper.GetIdentity(ctx);
         if (userId is null)
             return UnauthorizedResult();
         if (role != "Recruiter")
@@ -187,9 +190,12 @@ public static class CompanyEndpoints
 
     /// <summary>
     /// GET /api/companies?q=...&amp;page=1&amp;size=10 — public, no auth required.
-    /// Uses EF.Functions.ILike (Postgres) for case-insensitive search; falls back to
-    /// .ToLower().Contains() on InMemory (unit tests) which does not support ILike.
-    /// Returns paginated list of CompanyDetailDto.
+    /// Case-insensitive search over Name, Description, Industry and Address via
+    /// EF.Functions.ILike (Postgres, parameterized, wildcard-escaped). Providers that
+    /// cannot translate ILike (e.g. InMemory unit tests) fall back to
+    /// .ToLower().Contains(). Returns paginated list of CompanyDetailDto.
+    /// TECH DEBT (JOB-01): the try-ILike-then-fallback keeps provider detection out of
+    /// prod code; extract an ISearchStrategy if more providers ever appear.
     /// </summary>
     private static async Task<IResult> GetCompanies(
         JobDbContext db,
@@ -201,53 +207,68 @@ public static class CompanyEndpoints
         size = Math.Clamp(size, 1, 100);
         page = Math.Max(1, page);
 
-        var query = db.Companies.AsNoTracking();
         var searchTerm = (q ?? search)?.Trim();
 
-        if (!string.IsNullOrEmpty(searchTerm))
+        int total;
+        List<Company> items;
+        try
         {
-            var isInMemory = db.Database.ProviderName ==
-                "Microsoft.EntityFrameworkCore.InMemory";
-
-            if (isInMemory)
-            {
-                // InMemory (unit tests) — EF.Functions.ILike not supported
-                var lower = searchTerm.ToLower();
-                query = query.Where(c =>
-                    c.Name.ToLower().Contains(lower) ||
-                    (c.Industry != null && c.Industry.ToLower().Contains(lower)) ||
-                    (c.Address != null && c.Address.ToLower().Contains(lower))
-                );
-            }
-            else
-            {
-                // Postgres — ILike uses pg_ilike index-friendly operator (SEC-05: parameterized).
-                // Escape % _ \ so user input behaves literally (no accidental wildcard injection).
-                var escaped = searchTerm
-                    .Replace("\\", "\\\\")
-                    .Replace("%", "\\%")
-                    .Replace("_", "\\_");
-                var pattern = $"%{escaped}%";
-                query = query.Where(c =>
-                    EF.Functions.ILike(c.Name, pattern, "\\") ||
-                    (c.Industry != null && EF.Functions.ILike(c.Industry, pattern, "\\")) ||
-                    (c.Address != null && EF.Functions.ILike(c.Address, pattern, "\\"))
-                );
-            }
+            var query = ApplySearch(db.Companies.AsNoTracking(), searchTerm, useILike: true);
+            total = await query.CountAsync();
+            items = await query
+                .OrderBy(c => c.Name)
+                .Skip((page - 1) * size)
+                .Take(size)
+                .ToListAsync();
         }
-
-        var total = await query.CountAsync();
-        var items = await query
-            .OrderBy(c => c.Name)
-            .Skip((page - 1) * size)
-            .Take(size)
-            .ToListAsync();
+        catch (InvalidOperationException)
+        {
+            // Provider cannot translate EF.Functions.ILike (e.g. InMemory unit tests) —
+            // retry with case-insensitive Contains. Never triggered on Postgres:
+            // infra failures surface as NpgsqlException, not InvalidOperationException.
+            var fallback = ApplySearch(db.Companies.AsNoTracking(), searchTerm, useILike: false);
+            total = await fallback.CountAsync();
+            items = await fallback
+                .OrderBy(c => c.Name)
+                .Skip((page - 1) * size)
+                .Take(size)
+                .ToListAsync();
+        }
 
         var dtos = items.Select(CompanyDetailDto.From).ToList();
         var totalPages = (int)Math.Ceiling((double)total / size);
 
         return Results.Ok(new PaginatedResponse<CompanyDetailDto>(dtos, total, page, size, totalPages));
     }
+
+    private static IQueryable<Company> ApplySearch(IQueryable<Company> query, string? searchTerm, bool useILike)
+    {
+        if (string.IsNullOrEmpty(searchTerm))
+            return query;
+
+        if (useILike)
+        {
+            // Postgres — ILike uses pg_trgm/ilike index-friendly operator (SEC-05: parameterized).
+            // Escape % _ \ so user input behaves literally (no accidental wildcard injection).
+            var pattern = $"%{EscapeLike(searchTerm)}%";
+            return query.Where(c =>
+                EF.Functions.ILike(c.Name, pattern, "\\") ||
+                (c.Description != null && EF.Functions.ILike(c.Description, pattern, "\\")) ||
+                (c.Industry != null && EF.Functions.ILike(c.Industry, pattern, "\\")) ||
+                (c.Address != null && EF.Functions.ILike(c.Address, pattern, "\\")));
+        }
+
+        // Providers without ILike translation (e.g. InMemory unit tests).
+        var lower = searchTerm.ToLower();
+        return query.Where(c =>
+            c.Name.ToLower().Contains(lower) ||
+            (c.Description != null && c.Description.ToLower().Contains(lower)) ||
+            (c.Industry != null && c.Industry.ToLower().Contains(lower)) ||
+            (c.Address != null && c.Address.ToLower().Contains(lower)));
+    }
+
+    private static string EscapeLike(string term) =>
+        term.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
 
     /// <summary>
     /// GET /api/companies/{id} — public, returns 404 if not found.
@@ -273,7 +294,7 @@ public static class CompanyEndpoints
         JobDbContext db,
         HttpContext ctx)
     {
-        var (userId, role) = GetIdentity(ctx);
+        var (userId, role) = IdentityHelper.GetIdentity(ctx);
         if (userId is null)
             return UnauthorizedResult();
         if (role != "Recruiter")
@@ -340,14 +361,5 @@ public static class CompanyEndpoints
             return Results.Conflict(new { message = "Company name or tax code already exists." });
         }
         return Results.Ok(new { message = "Company updated successfully" });
-    }
-
-    private static (Guid? userId, string? role) GetIdentity(HttpContext ctx)
-    {
-        var rawUserId = ctx.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-        var role = ctx.User.FindFirst(ClaimTypes.Role)?.Value;
-        if (rawUserId is null || !Guid.TryParse(rawUserId, out var userId))
-            return (null, role);
-        return (userId, role);
     }
 }

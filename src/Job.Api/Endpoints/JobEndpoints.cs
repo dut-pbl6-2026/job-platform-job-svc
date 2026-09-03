@@ -1,4 +1,4 @@
-using System.Security.Claims;
+using Job.Api.Auth;
 using Job.Api.DTOs;
 using Job.Core.Entities;
 using Job.Infrastructure.Data;
@@ -42,7 +42,7 @@ public static class JobEndpoints
         JobDbContext db,
         HttpContext ctx)
     {
-        var (recruiterId, role) = GetIdentity(ctx);
+        var (recruiterId, role) = IdentityHelper.GetIdentity(ctx);
         if (recruiterId is null)
             return UnauthorizedResult();
         if (role != "Recruiter")
@@ -96,7 +96,7 @@ public static class JobEndpoints
     private static async Task<IResult> GetRecruiterJobs(
         JobDbContext db, HttpContext ctx, string? status = null, int page = 1, int size = 10)
     {
-        var (recruiterId, role) = GetIdentity(ctx);
+        var (recruiterId, role) = IdentityHelper.GetIdentity(ctx);
         if (recruiterId is null)
             return UnauthorizedResult();
         if (role != "Recruiter")
@@ -152,7 +152,7 @@ public static class JobEndpoints
     private static async Task<IResult> UpdateJob(
         Guid id, JobUpdateDto dto, JobDbContext db, HttpContext ctx)
     {
-        var (recruiterId, role) = GetIdentity(ctx);
+        var (recruiterId, role) = IdentityHelper.GetIdentity(ctx);
         if (recruiterId is null)
             return UnauthorizedResult();
         if (role != "Recruiter")
@@ -199,7 +199,7 @@ public static class JobEndpoints
 
     private static async Task<IResult> DeleteJob(Guid id, JobDbContext db, HttpContext ctx)
     {
-        var (recruiterId, role) = GetIdentity(ctx);
+        var (recruiterId, role) = IdentityHelper.GetIdentity(ctx);
         if (recruiterId is null)
             return UnauthorizedResult();
         if (role != "Recruiter")
@@ -213,14 +213,5 @@ public static class JobEndpoints
         job.SoftDelete();
         await db.SaveChangesAsync();
         return Results.NoContent();
-    }
-
-    private static (Guid? userId, string? role) GetIdentity(HttpContext ctx)
-    {
-        var rawUserId = ctx.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-        var role = ctx.User.FindFirst(ClaimTypes.Role)?.Value;
-        if (rawUserId is null || !Guid.TryParse(rawUserId, out var userId))
-            return (null, role);
-        return (userId, role);
     }
 }

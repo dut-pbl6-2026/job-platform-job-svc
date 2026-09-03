@@ -27,10 +27,17 @@ public class JobDbContext : DbContext
         b.Entity<Company>(e =>
         {
             e.HasKey(x => x.Id);
-            // The actual unique index on lower("Name") is created by the
-            // ReplaceCompanyNameIndexWithFunctionalLower migration using raw SQL DDL.
-            // We use HasDatabaseName here so EF's snapshot tracks the right name and
-            // doesn't try to recreate a plain IX_Companies_Name on top of it.
+            // INTENTIONAL TECH DEBT — model/DB index drift on Company.Name:
+            // The real unique index is functional — lower("Name") — created by the
+            // ReplaceCompanyNameIndexWithFunctionalLower migration using raw SQL DDL
+            // (EF Core fluent API cannot express expression-based indexes).
+            // The HasIndex(x => x.Name) declaration below exists only so the model
+            // snapshot tracks the index NAME and EF doesn't try to recreate a plain
+            // IX_Companies_Name on top of it. Consequence: the snapshot describes a
+            // column index while the DB has an expression index, so
+            // `mise run ef-check` (has-pending-model-changes) CANNOT detect drift here
+            // and a future migration touching this index may generate spurious
+            // DropIndex/CreateIndex — review such diffs manually before applying.
             e.HasIndex(x => x.Name)
                 .IsUnique()
                 .HasDatabaseName("IX_Companies_Name_Lower");

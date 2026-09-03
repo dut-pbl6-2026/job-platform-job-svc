@@ -16,13 +16,22 @@ namespace Job.Infrastructure.Data.Migrations
             // Therefore the Guid.Empty default is inert: it only applies to rows inserted
             // before this migration, and there are none.
             //
-            // If, in a future environment, rows exist before this migration:
+            // GUARD (release checklist): fail fast instead of silently creating
+            // un-ownable rows. If any row exists, the DBA must backfill first:
             //   1. Change nullable: false → nullable: true, remove defaultValue
             //   2. Backfill: UPDATE "Companies" SET "CreatedBy" = <real-recruiter-guid>
             //   3. Set NOT NULL in a follow-up migration
             //
             // Rows with CreatedBy == Guid.Empty are safe but cannot be updated via
             // PUT /api/companies/{id} (ownership check rejects them) — intentional.
+            // NOTE: editing this file is safe for DBs where the migration already ran —
+            // EF never re-executes applied migrations; the guard only fires on fresh runs.
+            migrationBuilder.Sql(
+                "DO $$ BEGIN IF EXISTS (SELECT 1 FROM \"Companies\") THEN " +
+                "RAISE EXCEPTION 'Migration AddCompanyCreatedBy requires an empty Companies table. " +
+                "Backfill CreatedBy for existing rows before migrating (see migration comment).'; " +
+                "END IF; END $$;");
+
             migrationBuilder.AddColumn<Guid>(
                 name: "CreatedBy",
                 table: "Companies",

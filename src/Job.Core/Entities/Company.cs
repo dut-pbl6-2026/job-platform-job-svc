@@ -55,15 +55,15 @@ public class Company : Entity
         ArgumentException.ThrowIfNullOrWhiteSpace(name, nameof(name));
         if (createdBy == Guid.Empty)
             throw new ArgumentException("CreatedBy cannot be empty.", nameof(createdBy));
-        Name = name.Trim();
+        Name = CheckLength(name.Trim(), NameMaxLength, nameof(name));
         CreatedBy = createdBy;
-        TaxCode = NormalizeOptional(taxCode);
-        LogoUrl = NormalizeOptional(logoUrl);
-        Website = NormalizeOptional(website);
-        Description = NormalizeOptional(description);
-        Address = NormalizeOptional(address);
-        Industry = NormalizeOptional(industry);
-        Size = NormalizeOptional(size);
+        TaxCode = NormalizeOptional(taxCode, TaxCodeMaxLength, nameof(taxCode));
+        LogoUrl = NormalizeOptional(logoUrl, LogoUrlMaxLength, nameof(logoUrl));
+        Website = NormalizeOptional(website, WebsiteMaxLength, nameof(website));
+        Description = NormalizeOptional(description, maxLength: null, nameof(description));
+        Address = NormalizeOptional(address, AddressMaxLength, nameof(address));
+        Industry = NormalizeOptional(industry, IndustryMaxLength, nameof(industry));
+        Size = NormalizeOptional(size, SizeMaxLength, nameof(size));
     }
 
     public void Update(
@@ -77,14 +77,14 @@ public class Company : Entity
         string? size)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name, nameof(name));
-        Name = name.Trim();
-        TaxCode = NormalizeOptional(taxCode);
-        LogoUrl = NormalizeOptional(logoUrl);
-        Website = NormalizeOptional(website);
-        Description = NormalizeOptional(description);
-        Address = NormalizeOptional(address);
-        Industry = NormalizeOptional(industry);
-        Size = NormalizeOptional(size);
+        Name = CheckLength(name.Trim(), NameMaxLength, nameof(name));
+        TaxCode = NormalizeOptional(taxCode, TaxCodeMaxLength, nameof(taxCode));
+        LogoUrl = NormalizeOptional(logoUrl, LogoUrlMaxLength, nameof(logoUrl));
+        Website = NormalizeOptional(website, WebsiteMaxLength, nameof(website));
+        Description = NormalizeOptional(description, maxLength: null, nameof(description));
+        Address = NormalizeOptional(address, AddressMaxLength, nameof(address));
+        Industry = NormalizeOptional(industry, IndustryMaxLength, nameof(industry));
+        Size = NormalizeOptional(size, SizeMaxLength, nameof(size));
         Touch();
     }
 
@@ -100,9 +100,19 @@ public class Company : Entity
         Touch();
     }
 
-    private static string? NormalizeOptional(string? value)
+    private static string CheckLength(string value, int maxLength, string paramName) =>
+        value.Length > maxLength
+            ? throw new ArgumentException($"{paramName} must not exceed {maxLength} characters.", paramName)
+            : value;
+
+    private static string? NormalizeOptional(string? value, int? maxLength, string paramName)
     {
         var trimmed = value?.Trim();
-        return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
+        if (string.IsNullOrWhiteSpace(trimmed))
+            return null;
+        // maxLength: null = unlimited (e.g. Description maps to Postgres text, no limit).
+        if (maxLength.HasValue && trimmed.Length > maxLength.Value)
+            throw new ArgumentException($"{paramName} must not exceed {maxLength.Value} characters.", paramName);
+        return trimmed;
     }
 }
