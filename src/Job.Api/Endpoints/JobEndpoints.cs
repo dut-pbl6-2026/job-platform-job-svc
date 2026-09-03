@@ -78,7 +78,7 @@ public static class JobEndpoints
         {
             job = new JobPosting(
                 dto.Title, dto.Description, dto.CompanyId, dto.Location,
-                Guid.Parse(recruiterId), dto.SalaryMin, dto.SalaryMax,
+                recruiterId.Value, dto.SalaryMin, dto.SalaryMax,
                 dto.SalaryCurrency ?? "VND", dto.CategoryId, dto.Requirements,
                 dto.Benefits, dto.EmploymentType ?? "FullTime", dto.ExperienceLevel ?? "Entry");
         }
@@ -104,7 +104,7 @@ public static class JobEndpoints
 
         size = Math.Clamp(size, 1, 100);
         page = Math.Max(1, page);
-        var recruitGuid = Guid.Parse(recruiterId);
+        var recruitGuid = recruiterId.Value;
 
         var query = db.Jobs.IgnoreQueryFilters().Where(j => j.RecruiterId == recruitGuid);
 
@@ -160,7 +160,7 @@ public static class JobEndpoints
 
         var job = await db.Jobs.IgnoreQueryFilters().FirstOrDefaultAsync(j => j.Id == id);
         if (job is null) return Results.NotFound(new { message = "Job not found" });
-        if (job.RecruiterId != Guid.Parse(recruiterId))
+        if (job.RecruiterId != recruiterId.Value)
             return ForbiddenResult("Forbidden. You do not own this job.");
 
         if (string.IsNullOrWhiteSpace(dto.Title))
@@ -207,7 +207,7 @@ public static class JobEndpoints
 
         var job = await db.Jobs.IgnoreQueryFilters().FirstOrDefaultAsync(j => j.Id == id);
         if (job is null) return Results.NotFound(new { message = "Job not found" });
-        if (job.RecruiterId != Guid.Parse(recruiterId))
+        if (job.RecruiterId != recruiterId.Value)
             return ForbiddenResult("Forbidden. You do not own this job.");
 
         job.SoftDelete();
@@ -215,10 +215,12 @@ public static class JobEndpoints
         return Results.NoContent();
     }
 
-    private static (string? userId, string? role) GetIdentity(HttpContext ctx)
+    private static (Guid? userId, string? role) GetIdentity(HttpContext ctx)
     {
-        var userId = ctx.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        var rawUserId = ctx.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
         var role = ctx.User.FindFirst(ClaimTypes.Role)?.Value;
+        if (rawUserId is null || !Guid.TryParse(rawUserId, out var userId))
+            return (null, role);
         return (userId, role);
     }
 }

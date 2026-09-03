@@ -3,6 +3,7 @@ using Job.Api.DTOs;
 using Job.Core.Entities;
 using Job.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace Job.Api.Endpoints;
 
@@ -135,8 +136,10 @@ public static class CompanyEndpoints
 
         if (!string.IsNullOrWhiteSpace(dto.TaxCode))
         {
-            var trimmedTax = dto.TaxCode.Trim();
-            var taxExists = await db.Companies.AnyAsync(c => c.TaxCode == trimmedTax);
+            // MST codes are numeric — compare case-insensitively for robustness
+            var trimmedTax = dto.TaxCode.Trim().ToLower();
+            var taxExists = await db.Companies.AnyAsync(c =>
+                c.TaxCode != null && c.TaxCode.ToLower() == trimmedTax);
             if (taxExists)
                 return Results.Conflict(new { message = "Tax code already registered." });
         }
@@ -164,7 +167,16 @@ public static class CompanyEndpoints
         }
 
         db.Companies.Add(company);
-        await db.SaveChangesAsync();
+        try
+        {
+            await db.SaveChangesAsync();
+        }
+        catch (DbUpdateException ex)
+            when (ex.InnerException is PostgresException { SqlState: "23505" })
+        {
+            // Concurrent duplicate slipped past the AnyAsync check — return 409 instead of 500.
+            return Results.Conflict(new { message = "Company name or tax code already exists." });
+        }
 
         return Results.Created($"/api/companies/{company.Id}", new
         {
@@ -290,9 +302,10 @@ public static class CompanyEndpoints
 
         if (!string.IsNullOrWhiteSpace(dto.TaxCode))
         {
-            var trimmedTax = dto.TaxCode.Trim();
+            // MST codes are numeric — compare case-insensitively for robustness
+            var trimmedTax = dto.TaxCode.Trim().ToLower();
             var taxConflict = await db.Companies
-                .AnyAsync(c => c.Id != id && c.TaxCode == trimmedTax);
+                .AnyAsync(c => c.Id != id && c.TaxCode != null && c.TaxCode.ToLower() == trimmedTax);
             if (taxConflict)
                 return Results.Conflict(new { message = "Tax code is already taken by another company." });
         }
@@ -316,7 +329,16 @@ public static class CompanyEndpoints
             { ["request"] = [ex.Message] });
         }
 
-        await db.SaveChangesAsync();
+        try
+        {
+            await db.SaveChangesAsync();
+        }
+        catch (DbUpdateException ex)
+            when (ex.InnerException is PostgresException { SqlState: "23505" })
+        {
+            // Concurrent duplicate slipped past the AnyAsync check — return 409 instead of 500.
+            return Results.Conflict(new { message = "Company name or tax code already exists." });
+        }
         return Results.Ok(new { message = "Company updated successfully" });
     }
 

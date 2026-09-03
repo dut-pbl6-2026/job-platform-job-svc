@@ -27,7 +27,13 @@ public class JobDbContext : DbContext
         b.Entity<Company>(e =>
         {
             e.HasKey(x => x.Id);
-            e.HasIndex(x => x.Name).IsUnique();
+            // The actual unique index on lower("Name") is created by the
+            // ReplaceCompanyNameIndexWithFunctionalLower migration using raw SQL DDL.
+            // We use HasDatabaseName here so EF's snapshot tracks the right name and
+            // doesn't try to recreate a plain IX_Companies_Name on top of it.
+            e.HasIndex(x => x.Name)
+                .IsUnique()
+                .HasDatabaseName("IX_Companies_Name_Lower");
             e.HasIndex(x => x.TaxCode).IsUnique().HasFilter("\"TaxCode\" IS NOT NULL");
             e.Property(x => x.Name).HasMaxLength(Company.NameMaxLength).IsRequired();
             e.Property(x => x.TaxCode).HasMaxLength(Company.TaxCodeMaxLength);

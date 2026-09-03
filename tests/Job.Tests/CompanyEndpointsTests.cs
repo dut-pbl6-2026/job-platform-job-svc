@@ -248,7 +248,7 @@ public class CompanyEndpointsTests : IDisposable
         Assert.Equal(company.Id, ok.Value!.Id);
         Assert.Equal("DetailCorp", ok.Value.Name);
         Assert.Equal("TAX-999", ok.Value.TaxCode);
-        Assert.Equal(_ownerId, ok.Value.CreatedBy);
+        // CreatedBy is intentionally omitted from the public DTO (internal ownership field)
     }
 
     [Fact]
@@ -388,7 +388,7 @@ public class CompanyEndpointsTests : IDisposable
         Assert.Equal("123 Street", dto.Address);
         Assert.Equal("Technology", dto.Industry);
         Assert.Equal("50-200", dto.Size);
-        Assert.Equal(_ownerId, dto.CreatedBy);
+        // CreatedBy is intentionally omitted from the public DTO (internal ownership field)
         Assert.False(dto.Verified); // default
     }
 }

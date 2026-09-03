@@ -31,6 +31,14 @@ public class Company : Entity
     /// </summary>
     public Guid CreatedBy { get; private set; }
 
+    /// <summary>
+    /// EF Core parameterless constructor — used only during materialization from the DB.
+    /// Does NOT call <see cref="ArgumentException.ThrowIfNullOrWhiteSpace"/> or the
+    /// <c>createdBy == Guid.Empty</c> guard; those invariants are enforced by the public
+    /// constructor at creation time. Any row in the DB with <c>CreatedBy == Guid.Empty</c>
+    /// is a migration artefact (see <c>AddCompanyCreatedBy</c> migration comment) and cannot
+    /// pass the PUT /api/companies/{id} ownership check by design.
+    /// </summary>
     private Company() { }
 
     public Company(

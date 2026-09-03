@@ -3,6 +3,11 @@ using Job.Core.Entities;
 namespace Job.Api.DTOs;
 
 /// <summary>Full company detail response — GET /api/companies/{id}.</summary>
+/// <remarks>
+/// CreatedBy is intentionally omitted: it is an internal ownership Guid used for
+/// PUT /api/companies/{id} authorization and is not part of the public company profile
+/// per SRS 3-must-have-fr.md:87 / 10-appendices.md:269.
+/// </remarks>
 public record CompanyDetailDto(
     Guid Id,
     string Name,
@@ -14,7 +19,6 @@ public record CompanyDetailDto(
     string? Address,
     string? Industry,
     string? Size,
-    Guid CreatedBy,
     DateTime CreatedAt,
     DateTime UpdatedAt
 )
@@ -31,7 +35,6 @@ public record CompanyDetailDto(
         c.Address,
         c.Industry,
         c.Size,
-        c.CreatedBy,
         c.CreatedAt,
         c.UpdatedAt
     );
