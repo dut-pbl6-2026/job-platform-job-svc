@@ -112,6 +112,9 @@ app.MapJobEndpoints();
 // Category endpoints (SRS JOB-01-06)
 app.MapCategoryEndpoints();
 
+// Company endpoints (SRS D.1 line 220-222)
+app.MapCompanyEndpoints();
+
 // REL-01: auto-migrate on startup with fail-fast (no swallow in any environment)
 using (var scope = app.Services.CreateScope())
 {

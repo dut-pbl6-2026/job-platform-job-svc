@@ -27,16 +27,32 @@ public class JobDbContext : DbContext
         b.Entity<Company>(e =>
         {
             e.HasKey(x => x.Id);
-            e.HasIndex(x => x.Name).IsUnique();
+            // INTENTIONAL TECH DEBT — model/DB index drift on Company.Name:
+            // The real unique index is functional — lower("Name") — created by the
+            // ReplaceCompanyNameIndexWithFunctionalLower migration using raw SQL DDL
+            // (EF Core fluent API cannot express expression-based indexes).
+            // The HasIndex(x => x.Name) declaration below exists only so the model
+            // snapshot tracks the index NAME and EF doesn't try to recreate a plain
+            // IX_Companies_Name on top of it. Consequence: the snapshot describes a
+            // column index while the DB has an expression index, so
+            // `mise run ef-check` (has-pending-model-changes) CANNOT detect drift here
+            // and a future migration touching this index may generate spurious
+            // DropIndex/CreateIndex — review such diffs manually before applying.
+            e.HasIndex(x => x.Name)
+                .IsUnique()
+                .HasDatabaseName("IX_Companies_Name_Lower");
             e.HasIndex(x => x.TaxCode).IsUnique().HasFilter("\"TaxCode\" IS NOT NULL");
-            e.Property(x => x.Name).HasMaxLength(256).IsRequired();
-            e.Property(x => x.TaxCode).HasMaxLength(20);
+            e.Property(x => x.Name).HasMaxLength(Company.NameMaxLength).IsRequired();
+            e.Property(x => x.TaxCode).HasMaxLength(Company.TaxCodeMaxLength);
             e.Property(x => x.Verified).HasDefaultValue(false);
-            e.Property(x => x.LogoUrl).HasMaxLength(2048);
-            e.Property(x => x.Website).HasMaxLength(2048);
-            e.Property(x => x.Address).HasMaxLength(512);
-            e.Property(x => x.Industry).HasMaxLength(128);
-            e.Property(x => x.Size).HasMaxLength(64);
+            e.Property(x => x.LogoUrl).HasMaxLength(Company.LogoUrlMaxLength);
+            e.Property(x => x.Website).HasMaxLength(Company.WebsiteMaxLength);
+            e.Property(x => x.Address).HasMaxLength(Company.AddressMaxLength);
+            e.Property(x => x.Industry).HasMaxLength(Company.IndustryMaxLength);
+            e.Property(x => x.Size).HasMaxLength(Company.SizeMaxLength);
+            // Ownership tracking — set at creation, used for PUT authorization
+            e.Property(x => x.CreatedBy).IsRequired();
+            e.HasIndex(x => x.CreatedBy);
         });
 
         b.Entity<JobPosting>(e =>

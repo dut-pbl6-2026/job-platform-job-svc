@@ -2,23 +2,23 @@
 dotnet = "10.0.100"
 
 [tasks.build]
-description = "Build solution"
+description = "Build solution with zero warnings"
 run = "dotnet build JobService.sln --warnaserror"
 
 [tasks.test]
-description = "Run tests"
-run = "dotnet test JobService.sln"
+description = "Run all unit tests"
+run = "dotnet test JobService.sln --no-build"
 
 [tasks.format]
-description = "Check formatting"
+description = "Check formatting without modifying files"
 run = "dotnet format --verify-no-changes JobService.sln"
 
 [tasks.ef-check]
-description = "Check EF migrations"
+description = "Check EF migrations for pending model changes"
 run = "dotnet ef migrations has-pending-model-changes --project src/Job.Infrastructure --startup-project src/Job.Api"
 
 [tasks.run]
-description = "Run API"
+description = "Run Job API service locally"
 run = "dotnet run --project src/Job.Api"
 
 [tasks.pack-shared]

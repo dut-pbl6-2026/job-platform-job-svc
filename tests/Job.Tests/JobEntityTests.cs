@@ -141,23 +141,65 @@ public class CategoryEntityTests
 
 public class CompanyEntityTests
 {
+    private readonly Guid _owner = Guid.NewGuid();
+
     [Fact]
     public void Ctor_ThrowsWhenNameEmpty()
     {
-        Assert.Throws<ArgumentException>(() => new Company(""));
+        Assert.Throws<ArgumentException>(() => new Company("", _owner));
+    }
+
+    [Fact]
+    public void Ctor_ThrowsWhenCreatedByEmpty()
+    {
+        Assert.Throws<ArgumentException>(() => new Company("Corp", Guid.Empty));
     }
 
     [Fact]
     public void Ctor_TrimsName()
     {
-        var company = new Company("  Acme Corp  ");
+        var company = new Company("  Acme Corp  ", _owner);
         Assert.Equal("Acme Corp", company.Name);
+    }
+
+    [Fact]
+    public void Ctor_SetsCreatedBy()
+    {
+        var company = new Company("Acme Corp", _owner);
+        Assert.Equal(_owner, company.CreatedBy);
+    }
+
+    [Fact]
+    public void Ctor_SetsAllOptionalFields()
+    {
+        var company = new Company(
+            "Acme Corp",
+            _owner,
+            taxCode: "TAX-123",
+            logoUrl: "https://logo.png",
+            website: "https://acme.com",
+            description: "A description",
+            address: "123 Street",
+            industry: "Technology",
+            size: "50-200"
+        );
+
+        Assert.Equal("Acme Corp", company.Name);
+        Assert.Equal(_owner, company.CreatedBy);
+        Assert.Equal("TAX-123", company.TaxCode);
+        Assert.Equal("https://logo.png", company.LogoUrl);
+        Assert.Equal("https://acme.com", company.Website);
+        Assert.Equal("A description", company.Description);
+        Assert.Equal("123 Street", company.Address);
+        Assert.Equal("Technology", company.Industry);
+        Assert.Equal("50-200", company.Size);
+        Assert.False(company.Verified);
     }
 
     [Fact]
     public void Update_ThrowsWhenNameWhitespace()
     {
-        var company = new Company("Acme Corp");
+        var company = new Company("Acme Corp", _owner);
         Assert.Throws<ArgumentException>(() =>
             company.Update("  ", null, null, null, null, null, null, null));
     }

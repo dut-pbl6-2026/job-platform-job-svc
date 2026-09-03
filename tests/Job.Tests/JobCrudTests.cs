@@ -34,7 +34,7 @@ public class JobCrudTests : IDisposable
 
     private void SeedCompany()
     {
-        var company = new Company("Acme Corp");
+        var company = new Company("Acme Corp", _recruiterId);
         typeof(Company).GetProperty("Id")!.SetValue(company, _companyId);
         _db.Companies.Add(company);
         _db.SaveChanges();

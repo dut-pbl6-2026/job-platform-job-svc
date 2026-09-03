@@ -1,4 +1,4 @@
-using System.Security.Claims;
+using Job.Api.Auth;
 using Job.Api.DTOs;
 using Job.Core.Entities;
 using Job.Infrastructure.Data;
@@ -42,7 +42,7 @@ public static class JobEndpoints
         JobDbContext db,
         HttpContext ctx)
     {
-        var (recruiterId, role) = GetIdentity(ctx);
+        var (recruiterId, role) = IdentityHelper.GetIdentity(ctx);
         if (recruiterId is null)
             return UnauthorizedResult();
         if (role != "Recruiter")
@@ -78,7 +78,7 @@ public static class JobEndpoints
         {
             job = new JobPosting(
                 dto.Title, dto.Description, dto.CompanyId, dto.Location,
-                Guid.Parse(recruiterId), dto.SalaryMin, dto.SalaryMax,
+                recruiterId.Value, dto.SalaryMin, dto.SalaryMax,
                 dto.SalaryCurrency ?? "VND", dto.CategoryId, dto.Requirements,
                 dto.Benefits, dto.EmploymentType ?? "FullTime", dto.ExperienceLevel ?? "Entry");
         }
@@ -96,7 +96,7 @@ public static class JobEndpoints
     private static async Task<IResult> GetRecruiterJobs(
         JobDbContext db, HttpContext ctx, string? status = null, int page = 1, int size = 10)
     {
-        var (recruiterId, role) = GetIdentity(ctx);
+        var (recruiterId, role) = IdentityHelper.GetIdentity(ctx);
         if (recruiterId is null)
             return UnauthorizedResult();
         if (role != "Recruiter")
@@ -104,7 +104,7 @@ public static class JobEndpoints
 
         size = Math.Clamp(size, 1, 100);
         page = Math.Max(1, page);
-        var recruitGuid = Guid.Parse(recruiterId);
+        var recruitGuid = recruiterId.Value;
 
         var query = db.Jobs.IgnoreQueryFilters().Where(j => j.RecruiterId == recruitGuid);
 
@@ -152,7 +152,7 @@ public static class JobEndpoints
     private static async Task<IResult> UpdateJob(
         Guid id, JobUpdateDto dto, JobDbContext db, HttpContext ctx)
     {
-        var (recruiterId, role) = GetIdentity(ctx);
+        var (recruiterId, role) = IdentityHelper.GetIdentity(ctx);
         if (recruiterId is null)
             return UnauthorizedResult();
         if (role != "Recruiter")
@@ -160,7 +160,7 @@ public static class JobEndpoints
 
         var job = await db.Jobs.IgnoreQueryFilters().FirstOrDefaultAsync(j => j.Id == id);
         if (job is null) return Results.NotFound(new { message = "Job not found" });
-        if (job.RecruiterId != Guid.Parse(recruiterId))
+        if (job.RecruiterId != recruiterId.Value)
             return ForbiddenResult("Forbidden. You do not own this job.");
 
         if (string.IsNullOrWhiteSpace(dto.Title))
@@ -199,7 +199,7 @@ public static class JobEndpoints
 
     private static async Task<IResult> DeleteJob(Guid id, JobDbContext db, HttpContext ctx)
     {
-        var (recruiterId, role) = GetIdentity(ctx);
+        var (recruiterId, role) = IdentityHelper.GetIdentity(ctx);
         if (recruiterId is null)
             return UnauthorizedResult();
         if (role != "Recruiter")
@@ -207,18 +207,11 @@ public static class JobEndpoints
 
         var job = await db.Jobs.IgnoreQueryFilters().FirstOrDefaultAsync(j => j.Id == id);
         if (job is null) return Results.NotFound(new { message = "Job not found" });
-        if (job.RecruiterId != Guid.Parse(recruiterId))
+        if (job.RecruiterId != recruiterId.Value)
             return ForbiddenResult("Forbidden. You do not own this job.");
 
         job.SoftDelete();
         await db.SaveChangesAsync();
         return Results.NoContent();
-    }
-
-    private static (string? userId, string? role) GetIdentity(HttpContext ctx)
-    {
-        var userId = ctx.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-        var role = ctx.User.FindFirst(ClaimTypes.Role)?.Value;
-        return (userId, role);
     }
 }

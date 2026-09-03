@@ -3,6 +3,7 @@ using System;
 using Job.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Job.Infrastructure.Data.Migrations
 {
     [DbContext(typeof(JobDbContext))]
-    partial class JobDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260830154417_DropSavedJobsSavedAt")]
+    partial class DropSavedJobsSavedAt
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -107,8 +110,7 @@ namespace Job.Infrastructure.Data.Migrations
                     b.HasIndex("CreatedBy");
 
                     b.HasIndex("Name")
-                        .IsUnique()
-                        .HasDatabaseName("IX_Companies_Name_Lower");
+                        .IsUnique();
 
                     b.HasIndex("TaxCode")
                         .IsUnique()
