@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Job.Api.DTOs;
+using Job.Api.Services;
 using Job.Core.Entities;
 using Job.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -40,7 +41,9 @@ public static class JobEndpoints
     private static async Task<IResult> CreateJob(
         JobCreateDto dto,
         JobDbContext db,
-        HttpContext ctx)
+        HttpContext ctx,
+        SearchSyncPublisher sync,
+        CancellationToken ct)
     {
         var (recruiterId, role) = GetIdentity(ctx);
         if (recruiterId is null)
@@ -90,6 +93,19 @@ public static class JobEndpoints
 
         db.Jobs.Add(job);
         await db.SaveChangesAsync();
+        // PBL6-19: best-effort sync to search index (never fails the request).
+        var company = await db.Companies.FindAsync(new object[] { dto.CompanyId }, ct);
+        string? categoryName = null;
+        if (dto.CategoryId.HasValue)
+        {
+            var category = await db.Categories.FindAsync(new object[] { dto.CategoryId.Value }, ct);
+            categoryName = category?.Name;
+        }
+
+        await sync.PublishAsync(SearchSyncPublisher.CreatedEvent(
+            job.Id, job.Title, job.Description, job.CompanyId, company?.Name, job.Location,
+            job.SalaryMin, job.SalaryMax, job.SalaryCurrency, job.CategoryId, categoryName,
+            job.Requirements, job.Benefits, job.EmploymentType, job.ExperienceLevel, job.RecruiterId), ct);
         return Results.Created($"/api/jobs/{job.Id}", new { id = job.Id, message = "Job created" });
     }
 
@@ -150,7 +166,8 @@ public static class JobEndpoints
     }
 
     private static async Task<IResult> UpdateJob(
-        Guid id, JobUpdateDto dto, JobDbContext db, HttpContext ctx)
+        Guid id, JobUpdateDto dto, JobDbContext db, HttpContext ctx,
+        SearchSyncPublisher sync, CancellationToken ct)
     {
         var (recruiterId, role) = GetIdentity(ctx);
         if (recruiterId is null)
@@ -194,10 +211,23 @@ public static class JobEndpoints
         }
 
         await db.SaveChangesAsync();
+        // PBL6-19: best-effort sync to search index (never fails the request).
+        var updatedCompany = await db.Companies.FindAsync(new object[] { dto.CompanyId }, ct);
+        string? updatedCategoryName = null;
+        if (dto.CategoryId.HasValue)
+        {
+            var updatedCategory = await db.Categories.FindAsync(new object[] { dto.CategoryId.Value }, ct);
+            updatedCategoryName = updatedCategory?.Name;
+        }
+
+        await sync.PublishAsync(SearchSyncPublisher.UpdatedEvent(
+            job.Id, job.Title, job.Description, job.CompanyId, updatedCompany?.Name, job.Location,
+            job.SalaryMin, job.SalaryMax, job.SalaryCurrency, job.CategoryId, updatedCategoryName,
+            job.Requirements, job.Benefits, job.EmploymentType, job.ExperienceLevel, job.RecruiterId), ct);
         return Results.Ok(new { message = "Job updated" });
     }
 
-    private static async Task<IResult> DeleteJob(Guid id, JobDbContext db, HttpContext ctx)
+    private static async Task<IResult> DeleteJob(Guid id, JobDbContext db, HttpContext ctx, SearchSyncPublisher sync, CancellationToken ct)
     {
         var (recruiterId, role) = GetIdentity(ctx);
         if (recruiterId is null)
@@ -212,6 +242,8 @@ public static class JobEndpoints
 
         job.SoftDelete();
         await db.SaveChangesAsync();
+        // PBL6-19: best-effort removal from search index (never fails the request).
+        await sync.PublishAsync(SearchSyncPublisher.DeletedEvent(id), ct);
         return Results.NoContent();
     }
 

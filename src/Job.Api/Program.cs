@@ -1,6 +1,7 @@
 using System.Text;
 using Job.Api.Endpoints;
 using Job.Api.Middleware;
+using Job.Api.Services;
 using Job.Infrastructure.Data;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
@@ -58,6 +59,12 @@ if (!builder.Environment.IsDevelopment())
 
 // REL-07: ProblemDetails for RFC 7807 error responses (7-eir.md:7.7.1)
 builder.Services.AddProblemDetails();
+
+// PBL6-19: search sync publisher (direct HTTP to search-svc; disabled when SEARCH_SYNC_URL unset).
+builder.Services.AddHttpClient<SearchSyncPublisher>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(5);
+});
 
 // MAINT-03: OpenAPI 3.0 (7-eir.md:7.5.3)
 builder.Services.AddEndpointsApiExplorer();
