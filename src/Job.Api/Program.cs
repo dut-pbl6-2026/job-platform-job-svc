@@ -1,6 +1,7 @@
 using System.Text;
 using Job.Api.Endpoints;
 using Job.Api.Middleware;
+using Job.Api.Services;
 using Job.Infrastructure.Data;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
@@ -59,6 +60,12 @@ if (!builder.Environment.IsDevelopment())
 // REL-07: ProblemDetails for RFC 7807 error responses (7-eir.md:7.7.1)
 builder.Services.AddProblemDetails();
 
+// PBL6-19: search sync publisher (direct HTTP to search-svc; disabled when SEARCH_SYNC_URL unset).
+builder.Services.AddHttpClient<SearchSyncPublisher>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(5);
+});
+
 // MAINT-03: OpenAPI 3.0 (7-eir.md:7.5.3)
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(o =>
@@ -109,7 +116,12 @@ app.MapGet("/", () => Results.Ok(new { service = "job", version = "0.1.0" }))
 // Job CRUD endpoints (SRS JOB-01-01 to JOB-01-05)
 app.MapJobEndpoints();
 
-// Category endpoints (SRS JOB-01-06)
+// PBL6-19 (S-2): surface search-sync wiring once at startup — a missing
+// SEARCH_SYNC_URL silently disables indexing, which must never go unnoticed.
+if (string.IsNullOrWhiteSpace(app.Configuration["SEARCH_SYNC_URL"] ?? app.Configuration["SearchSync:Url"]))
+{
+    app.Logger.LogWarning("SEARCH_SYNC_URL is not set. Search index sync is DISABLED — jobs will not appear in search results.");
+}// Category endpoints (SRS JOB-01-06)
 app.MapCategoryEndpoints();
 
 // Company endpoints (SRS D.1 line 220-222)

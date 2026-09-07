@@ -1,5 +1,6 @@
 using Job.Api.Auth;
 using Job.Api.DTOs;
+using Job.Api.Services;
 using Job.Core.Entities;
 using Job.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -40,7 +41,9 @@ public static class JobEndpoints
     private static async Task<IResult> CreateJob(
         JobCreateDto dto,
         JobDbContext db,
-        HttpContext ctx)
+        HttpContext ctx,
+        SearchSyncPublisher sync,
+        CancellationToken ct)
     {
         var (recruiterId, role) = IdentityHelper.GetIdentity(ctx);
         if (recruiterId is null)
@@ -60,15 +63,18 @@ public static class JobEndpoints
             return Results.ValidationProblem(new Dictionary<string, string[]>
             { ["location"] = ["Location is required."] });
 
-        var companyExists = await db.Companies.AnyAsync(c => c.Id == dto.CompanyId);
-        if (!companyExists)
+        // Single load upfront: reused for validation AND sync (avoids N+1 re-fetch
+        // after SaveChanges and the AnyAsync->FindAsync double query).
+        var company = await db.Companies.FirstOrDefaultAsync(c => c.Id == dto.CompanyId, ct);
+        if (company is null)
             return Results.ValidationProblem(new Dictionary<string, string[]>
             { ["companyId"] = ["Company not found."] });
 
+        Category? category = null;
         if (dto.CategoryId.HasValue)
         {
-            var categoryExists = await db.Categories.AnyAsync(c => c.Id == dto.CategoryId.Value);
-            if (!categoryExists)
+            category = await db.Categories.FirstOrDefaultAsync(c => c.Id == dto.CategoryId.Value, ct);
+            if (category is null)
                 return Results.ValidationProblem(new Dictionary<string, string[]>
                 { ["categoryId"] = ["Category not found."] });
         }
@@ -89,7 +95,16 @@ public static class JobEndpoints
         }
 
         db.Jobs.Add(job);
-        await db.SaveChangesAsync();
+        await db.SaveChangesAsync(ct);
+        // PBL6-19: best-effort sync to search index (never fails the request).
+        // Detached from request cancellation: post-commit work must not throw
+        // OperationCanceledException (=> 500) for an already-persisted job when
+        // the client disconnects. The publisher swallows all exceptions.
+        await sync.PublishUpsertAsync(SearchSyncPublisher.BuildDocument(
+            job.Id, job.Title, job.Description, job.CompanyId, company.Name, job.Location,
+            job.SalaryMin, job.SalaryMax, job.SalaryCurrency, job.CategoryId, category?.Name,
+            job.Requirements, job.Benefits, job.EmploymentType, job.ExperienceLevel, job.RecruiterId,
+            job.Status.ToString()), CancellationToken.None);
         return Results.Created($"/api/jobs/{job.Id}", new { id = job.Id, message = "Job created" });
     }
 
@@ -114,9 +129,9 @@ public static class JobEndpoints
 
         var total = await query.CountAsync();
         var items = await query
+            .Include(j => j.Company).Include(j => j.Category)
             .OrderByDescending(j => j.CreatedAt)
-            .Skip((page - 1) * size).Take(size)
-            .Include(j => j.Company).Include(j => j.Category).ToListAsync();
+            .Skip((page - 1) * size).Take(size).ToListAsync();
 
         var dtos = items.Select(JobDetailDto.From).ToList();
         var totalPages = (int)Math.Ceiling((double)total / size);
@@ -150,7 +165,8 @@ public static class JobEndpoints
     }
 
     private static async Task<IResult> UpdateJob(
-        Guid id, JobUpdateDto dto, JobDbContext db, HttpContext ctx)
+        Guid id, JobUpdateDto dto, JobDbContext db, HttpContext ctx,
+        SearchSyncPublisher sync, CancellationToken ct)
     {
         var (recruiterId, role) = IdentityHelper.GetIdentity(ctx);
         if (recruiterId is null)
@@ -167,15 +183,16 @@ public static class JobEndpoints
             return Results.ValidationProblem(new Dictionary<string, string[]>
             { ["title"] = ["Title is required."] });
 
-        var companyExists = await db.Companies.AnyAsync(c => c.Id == dto.CompanyId);
-        if (!companyExists)
+        var updateCompany = await db.Companies.FirstOrDefaultAsync(c => c.Id == dto.CompanyId, ct);
+        if (updateCompany is null)
             return Results.ValidationProblem(new Dictionary<string, string[]>
             { ["companyId"] = ["Company not found."] });
 
+        Category? updateCategory = null;
         if (dto.CategoryId.HasValue)
         {
-            var categoryExists = await db.Categories.AnyAsync(c => c.Id == dto.CategoryId.Value);
-            if (!categoryExists)
+            updateCategory = await db.Categories.FirstOrDefaultAsync(c => c.Id == dto.CategoryId.Value, ct);
+            if (updateCategory is null)
                 return Results.ValidationProblem(new Dictionary<string, string[]>
                 { ["categoryId"] = ["Category not found."] });
         }
@@ -193,11 +210,19 @@ public static class JobEndpoints
             { ["request"] = [ex.Message] });
         }
 
-        await db.SaveChangesAsync();
+        await db.SaveChangesAsync(ct);
+        // PBL6-19: best-effort sync, detached from request cancellation (see CreateJob).
+        // Pass the ACTUAL status: Update() never changes it, so a Closed job
+        // updated here must stay Closed in the index (search filters Active).
+        await sync.PublishUpsertAsync(SearchSyncPublisher.BuildDocument(
+            job.Id, job.Title, job.Description, job.CompanyId, updateCompany.Name, job.Location,
+            job.SalaryMin, job.SalaryMax, job.SalaryCurrency, job.CategoryId, updateCategory?.Name,
+            job.Requirements, job.Benefits, job.EmploymentType, job.ExperienceLevel, job.RecruiterId,
+            job.Status.ToString()), CancellationToken.None);
         return Results.Ok(new { message = "Job updated" });
     }
 
-    private static async Task<IResult> DeleteJob(Guid id, JobDbContext db, HttpContext ctx)
+    private static async Task<IResult> DeleteJob(Guid id, JobDbContext db, HttpContext ctx, SearchSyncPublisher sync, CancellationToken ct)
     {
         var (recruiterId, role) = IdentityHelper.GetIdentity(ctx);
         if (recruiterId is null)
@@ -211,7 +236,10 @@ public static class JobEndpoints
             return ForbiddenResult("Forbidden. You do not own this job.");
 
         job.SoftDelete();
-        await db.SaveChangesAsync();
+        await db.SaveChangesAsync(ct);
+        // PBL6-19: best-effort removal from search index, detached from request
+        // cancellation (see CreateJob).
+        await sync.PublishDeleteAsync(id, CancellationToken.None);
         return Results.NoContent();
     }
 }
