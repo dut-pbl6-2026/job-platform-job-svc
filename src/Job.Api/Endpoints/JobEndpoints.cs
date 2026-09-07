@@ -102,7 +102,7 @@ public static class JobEndpoints
             categoryName = category?.Name;
         }
 
-        await sync.PublishAsync(SearchSyncPublisher.CreatedEvent(
+        await sync.PublishUpsertAsync(SearchSyncPublisher.UpsertDocument(
             job.Id, job.Title, job.Description, job.CompanyId, company?.Name, job.Location,
             job.SalaryMin, job.SalaryMax, job.SalaryCurrency, job.CategoryId, categoryName,
             job.Requirements, job.Benefits, job.EmploymentType, job.ExperienceLevel, job.RecruiterId), ct);
@@ -220,7 +220,7 @@ public static class JobEndpoints
             updatedCategoryName = updatedCategory?.Name;
         }
 
-        await sync.PublishAsync(SearchSyncPublisher.UpdatedEvent(
+        await sync.PublishUpsertAsync(SearchSyncPublisher.UpsertDocument(
             job.Id, job.Title, job.Description, job.CompanyId, updatedCompany?.Name, job.Location,
             job.SalaryMin, job.SalaryMax, job.SalaryCurrency, job.CategoryId, updatedCategoryName,
             job.Requirements, job.Benefits, job.EmploymentType, job.ExperienceLevel, job.RecruiterId), ct);
@@ -243,7 +243,7 @@ public static class JobEndpoints
         job.SoftDelete();
         await db.SaveChangesAsync();
         // PBL6-19: best-effort removal from search index (never fails the request).
-        await sync.PublishAsync(SearchSyncPublisher.DeletedEvent(id), ct);
+        await sync.PublishDeleteAsync(id, ct);
         return Results.NoContent();
     }
 

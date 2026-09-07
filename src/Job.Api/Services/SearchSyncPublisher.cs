@@ -4,9 +4,11 @@ using System.Text.Json;
 namespace Job.Api.Services;
 
 /// <summary>
-/// Publishes job events to search-svc via direct HTTP sync (PBL6-19 fallback path).
-/// Fire-and-forget: never fails job CRUD when search is unavailable.
-/// Kafka outbox publishing lands in SHOULD phase (W5) once the broker client is cached in CI.
+/// Publishes job documents to search-svc index endpoints (PBL6-19 HTTP sync path).
+/// Contract: POST {SEARCH_SYNC_URL}/api/search/index (JobSyncDto, PascalCase),
+/// DELETE {SEARCH_SYNC_URL}/api/search/index/{id}.
+/// Best-effort: never fails job CRUD when search is unavailable.
+/// Kafka outbox publishing lands in SHOULD phase (W5).
 /// </summary>
 public class SearchSyncPublisher
 {
@@ -24,7 +26,7 @@ public class SearchSyncPublisher
 
     public bool Enabled => !string.IsNullOrWhiteSpace(_syncUrl);
 
-    public async Task PublishAsync(object payload, CancellationToken ct = default)
+    public async Task PublishUpsertAsync(object document, CancellationToken ct = default)
     {
         if (!Enabled)
         {
@@ -34,68 +36,65 @@ public class SearchSyncPublisher
         try
         {
             using var response = await _http.PostAsync(
-                $"{_syncUrl}/internal/jobs/sync",
-                new StringContent(JsonSerializer.Serialize(payload, JsonOptions), Encoding.UTF8, "application/json"),
+                $"{_syncUrl}/api/search/index",
+                new StringContent(JsonSerializer.Serialize(document, JsonOptions), Encoding.UTF8, "application/json"),
                 ct);
             if (!response.IsSuccessStatusCode)
             {
-                _logger.LogWarning("Search sync HTTP {Status} for {Url}", (int)response.StatusCode, _syncUrl);
+                _logger.LogWarning("Search index sync HTTP {Status} for {Url}", (int)response.StatusCode, _syncUrl);
             }
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Search sync failed (non-blocking) for {Url}", _syncUrl);
+            _logger.LogWarning(ex, "Search index sync failed (non-blocking) for {Url}", _syncUrl);
         }
     }
 
-    public static object JobEvent(
-        string eventType,
+    public async Task PublishDeleteAsync(Guid jobId, CancellationToken ct = default)
+    {
+        if (!Enabled)
+        {
+            return;
+        }
+
+        try
+        {
+            using var response = await _http.DeleteAsync(
+                $"{_syncUrl}/api/search/index/{jobId}",
+                ct);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("Search index delete HTTP {Status} for {Url}", (int)response.StatusCode, _syncUrl);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Search index delete failed (non-blocking) for {Url}", _syncUrl);
+        }
+    }
+
+    public static object UpsertDocument(
         Guid jobId, string title, string description, Guid companyId, string? companyName,
         string location, decimal? salaryMin, decimal? salaryMax, string currency,
         Guid? categoryId, string? categoryName, string? requirements, string? benefits,
         string employmentType, string experienceLevel, Guid recruiterId, string status = "Active") => new Dictionary<string, object?>
         {
-            ["event_type"] = eventType,
-            ["job_id"] = jobId.ToString(),
-            ["title"] = title,
-            ["description"] = description,
-            ["company_id"] = companyId.ToString(),
-            ["company_name"] = companyName ?? "",
-            ["location"] = location,
-            ["salary_min"] = salaryMin,
-            ["salary_max"] = salaryMax,
-            ["currency"] = currency,
-            ["category_id"] = categoryId?.ToString(),
-            ["category_name"] = categoryName,
-            ["employment_type"] = employmentType,
-            ["experience_level"] = experienceLevel,
-            ["status"] = status,
-            ["recruiter_id"] = recruiterId.ToString(),
-            ["requirements"] = requirements,
-            ["benefits"] = benefits,
+            ["Id"] = jobId.ToString(),
+            ["Title"] = title,
+            ["Description"] = description,
+            ["CompanyId"] = companyId.ToString(),
+            ["CompanyName"] = companyName ?? "",
+            ["Location"] = location,
+            ["SalaryMin"] = salaryMin,
+            ["SalaryMax"] = salaryMax,
+            ["Currency"] = currency,
+            ["CategoryId"] = categoryId?.ToString(),
+            ["CategoryName"] = categoryName,
+            ["EmploymentType"] = employmentType,
+            ["ExperienceLevel"] = experienceLevel,
+            ["Status"] = status,
+            ["RecruiterId"] = recruiterId.ToString(),
+            ["Requirements"] = requirements,
+            ["Benefits"] = benefits,
         };
-
-    public static object CreatedEvent(
-        Guid jobId, string title, string description, Guid companyId, string? companyName,
-        string location, decimal? salaryMin, decimal? salaryMax, string currency,
-        Guid? categoryId, string? categoryName, string? requirements, string? benefits,
-        string employmentType, string experienceLevel, Guid recruiterId) =>
-        JobEvent("job.created", jobId, title, description, companyId, companyName, location,
-            salaryMin, salaryMax, currency, categoryId, categoryName, requirements,
-            benefits, employmentType, experienceLevel, recruiterId);
-
-    public static object UpdatedEvent(
-        Guid jobId, string title, string description, Guid companyId, string? companyName,
-        string location, decimal? salaryMin, decimal? salaryMax, string currency,
-        Guid? categoryId, string? categoryName, string? requirements, string? benefits,
-        string employmentType, string experienceLevel, Guid recruiterId) =>
-        JobEvent("job.updated", jobId, title, description, companyId, companyName, location,
-            salaryMin, salaryMax, currency, categoryId, categoryName, requirements,
-            benefits, employmentType, experienceLevel, recruiterId);
-
-    public static object DeletedEvent(Guid jobId) => new Dictionary<string, object?>
-    {
-        ["event_type"] = "job.deleted",
-        ["job_id"] = jobId.ToString(),
-    };
 }
