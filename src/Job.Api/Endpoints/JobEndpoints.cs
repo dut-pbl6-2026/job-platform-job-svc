@@ -63,15 +63,18 @@ public static class JobEndpoints
             return Results.ValidationProblem(new Dictionary<string, string[]>
             { ["location"] = ["Location is required."] });
 
-        var companyExists = await db.Companies.AnyAsync(c => c.Id == dto.CompanyId);
-        if (!companyExists)
+        // Single load upfront: reused for validation AND sync (avoids N+1 re-fetch
+        // after SaveChanges and the AnyAsync->FindAsync double query).
+        var company = await db.Companies.FirstOrDefaultAsync(c => c.Id == dto.CompanyId, ct);
+        if (company is null)
             return Results.ValidationProblem(new Dictionary<string, string[]>
             { ["companyId"] = ["Company not found."] });
 
+        Category? category = null;
         if (dto.CategoryId.HasValue)
         {
-            var categoryExists = await db.Categories.AnyAsync(c => c.Id == dto.CategoryId.Value);
-            if (!categoryExists)
+            category = await db.Categories.FirstOrDefaultAsync(c => c.Id == dto.CategoryId.Value, ct);
+            if (category is null)
                 return Results.ValidationProblem(new Dictionary<string, string[]>
                 { ["categoryId"] = ["Category not found."] });
         }
@@ -92,20 +95,16 @@ public static class JobEndpoints
         }
 
         db.Jobs.Add(job);
-        await db.SaveChangesAsync();
+        await db.SaveChangesAsync(ct);
         // PBL6-19: best-effort sync to search index (never fails the request).
-        var company = await db.Companies.FindAsync(new object[] { dto.CompanyId }, ct);
-        string? categoryName = null;
-        if (dto.CategoryId.HasValue)
-        {
-            var category = await db.Categories.FindAsync(new object[] { dto.CategoryId.Value }, ct);
-            categoryName = category?.Name;
-        }
-
-        await sync.PublishUpsertAsync(SearchSyncPublisher.UpsertDocument(
-            job.Id, job.Title, job.Description, job.CompanyId, company?.Name, job.Location,
-            job.SalaryMin, job.SalaryMax, job.SalaryCurrency, job.CategoryId, categoryName,
-            job.Requirements, job.Benefits, job.EmploymentType, job.ExperienceLevel, job.RecruiterId), ct);
+        // Detached from request cancellation: post-commit work must not throw
+        // OperationCanceledException (=> 500) for an already-persisted job when
+        // the client disconnects. The publisher swallows all exceptions.
+        await sync.PublishUpsertAsync(SearchSyncPublisher.BuildDocument(
+            job.Id, job.Title, job.Description, job.CompanyId, company.Name, job.Location,
+            job.SalaryMin, job.SalaryMax, job.SalaryCurrency, job.CategoryId, category?.Name,
+            job.Requirements, job.Benefits, job.EmploymentType, job.ExperienceLevel, job.RecruiterId,
+            job.Status.ToString()), CancellationToken.None);
         return Results.Created($"/api/jobs/{job.Id}", new { id = job.Id, message = "Job created" });
     }
 
@@ -130,9 +129,9 @@ public static class JobEndpoints
 
         var total = await query.CountAsync();
         var items = await query
+            .Include(j => j.Company).Include(j => j.Category)
             .OrderByDescending(j => j.CreatedAt)
-            .Skip((page - 1) * size).Take(size)
-            .Include(j => j.Company).Include(j => j.Category).ToListAsync();
+            .Skip((page - 1) * size).Take(size).ToListAsync();
 
         var dtos = items.Select(JobDetailDto.From).ToList();
         var totalPages = (int)Math.Ceiling((double)total / size);
@@ -184,15 +183,16 @@ public static class JobEndpoints
             return Results.ValidationProblem(new Dictionary<string, string[]>
             { ["title"] = ["Title is required."] });
 
-        var companyExists = await db.Companies.AnyAsync(c => c.Id == dto.CompanyId);
-        if (!companyExists)
+        var updateCompany = await db.Companies.FirstOrDefaultAsync(c => c.Id == dto.CompanyId, ct);
+        if (updateCompany is null)
             return Results.ValidationProblem(new Dictionary<string, string[]>
             { ["companyId"] = ["Company not found."] });
 
+        Category? updateCategory = null;
         if (dto.CategoryId.HasValue)
         {
-            var categoryExists = await db.Categories.AnyAsync(c => c.Id == dto.CategoryId.Value);
-            if (!categoryExists)
+            updateCategory = await db.Categories.FirstOrDefaultAsync(c => c.Id == dto.CategoryId.Value, ct);
+            if (updateCategory is null)
                 return Results.ValidationProblem(new Dictionary<string, string[]>
                 { ["categoryId"] = ["Category not found."] });
         }
@@ -210,20 +210,15 @@ public static class JobEndpoints
             { ["request"] = [ex.Message] });
         }
 
-        await db.SaveChangesAsync();
-        // PBL6-19: best-effort sync to search index (never fails the request).
-        var updatedCompany = await db.Companies.FindAsync(new object[] { dto.CompanyId }, ct);
-        string? updatedCategoryName = null;
-        if (dto.CategoryId.HasValue)
-        {
-            var updatedCategory = await db.Categories.FindAsync(new object[] { dto.CategoryId.Value }, ct);
-            updatedCategoryName = updatedCategory?.Name;
-        }
-
-        await sync.PublishUpsertAsync(SearchSyncPublisher.UpsertDocument(
-            job.Id, job.Title, job.Description, job.CompanyId, updatedCompany?.Name, job.Location,
-            job.SalaryMin, job.SalaryMax, job.SalaryCurrency, job.CategoryId, updatedCategoryName,
-            job.Requirements, job.Benefits, job.EmploymentType, job.ExperienceLevel, job.RecruiterId), ct);
+        await db.SaveChangesAsync(ct);
+        // PBL6-19: best-effort sync, detached from request cancellation (see CreateJob).
+        // Pass the ACTUAL status: Update() never changes it, so a Closed job
+        // updated here must stay Closed in the index (search filters Active).
+        await sync.PublishUpsertAsync(SearchSyncPublisher.BuildDocument(
+            job.Id, job.Title, job.Description, job.CompanyId, updateCompany.Name, job.Location,
+            job.SalaryMin, job.SalaryMax, job.SalaryCurrency, job.CategoryId, updateCategory?.Name,
+            job.Requirements, job.Benefits, job.EmploymentType, job.ExperienceLevel, job.RecruiterId,
+            job.Status.ToString()), CancellationToken.None);
         return Results.Ok(new { message = "Job updated" });
     }
 
@@ -241,9 +236,10 @@ public static class JobEndpoints
             return ForbiddenResult("Forbidden. You do not own this job.");
 
         job.SoftDelete();
-        await db.SaveChangesAsync();
-        // PBL6-19: best-effort removal from search index (never fails the request).
-        await sync.PublishDeleteAsync(id, ct);
+        await db.SaveChangesAsync(ct);
+        // PBL6-19: best-effort removal from search index, detached from request
+        // cancellation (see CreateJob).
+        await sync.PublishDeleteAsync(id, CancellationToken.None);
         return Results.NoContent();
     }
 

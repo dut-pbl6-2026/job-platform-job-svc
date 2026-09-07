@@ -116,7 +116,12 @@ app.MapGet("/", () => Results.Ok(new { service = "job", version = "0.1.0" }))
 // Job CRUD endpoints (SRS JOB-01-01 to JOB-01-05)
 app.MapJobEndpoints();
 
-// Category endpoints (SRS JOB-01-06)
+// PBL6-19 (S-2): surface search-sync wiring once at startup — a missing
+// SEARCH_SYNC_URL silently disables indexing, which must never go unnoticed.
+if (string.IsNullOrWhiteSpace(app.Configuration["SEARCH_SYNC_URL"] ?? app.Configuration["SearchSync:Url"]))
+{
+    app.Logger.LogWarning("SEARCH_SYNC_URL is not set. Search index sync is DISABLED — jobs will not appear in search results.");
+}// Category endpoints (SRS JOB-01-06)
 app.MapCategoryEndpoints();
 
 // REL-01: auto-migrate on startup with fail-fast (no swallow in any environment)
