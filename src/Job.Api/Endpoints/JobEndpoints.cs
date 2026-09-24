@@ -4,6 +4,7 @@ using Job.Api.Services;
 using Job.Core.Entities;
 using Job.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using SharedKernel.Events;
 using JobPosting = Job.Core.Entities.Job;
 
 namespace Job.Api.Endpoints;
@@ -43,6 +44,7 @@ public static class JobEndpoints
         JobDbContext db,
         HttpContext ctx,
         SearchSyncPublisher sync,
+        KafkaJobEventPublisher kafkaPublisher,
         CancellationToken ct)
     {
         var (recruiterId, role) = IdentityHelper.GetIdentity(ctx);
@@ -96,15 +98,19 @@ public static class JobEndpoints
 
         db.Jobs.Add(job);
         await db.SaveChangesAsync(ct);
-        // PBL6-19: best-effort sync to search index (never fails the request).
+        // PBL6-5: publish job.created event (Kafka primary, HTTP fallback).
         // Detached from request cancellation: post-commit work must not throw
         // OperationCanceledException (=> 500) for an already-persisted job when
         // the client disconnects. The publisher swallows all exceptions.
-        await sync.PublishUpsertAsync(SearchSyncPublisher.BuildDocument(
-            job.Id, job.Title, job.Description, job.CompanyId, company.Name, job.Location,
-            job.SalaryMin, job.SalaryMax, job.SalaryCurrency, job.CategoryId, category?.Name,
-            job.Requirements, job.Benefits, job.EmploymentType, job.ExperienceLevel, job.RecruiterId,
-            job.Status.ToString()), CancellationToken.None);
+        var createdEvent = new JobCreatedEvent(
+            job.Id, job.Title, job.Description, job.CompanyId, company.Name,
+            job.Location, job.SalaryMin, job.SalaryMax, job.SalaryCurrency,
+            job.CategoryId, category?.Name, job.EmploymentType, job.ExperienceLevel,
+            job.RecruiterId, job.Requirements, job.Benefits,
+            job.Status.ToString(), DateTime.UtcNow);
+        await kafkaPublisher.PublishJobCreatedAsync(
+            createdEvent, company.Name, category?.Name,
+            job.Status.ToString(), CancellationToken.None);
         return Results.Created($"/api/jobs/{job.Id}", new { id = job.Id, message = "Job created" });
     }
 
@@ -166,7 +172,7 @@ public static class JobEndpoints
 
     private static async Task<IResult> UpdateJob(
         Guid id, JobUpdateDto dto, JobDbContext db, HttpContext ctx,
-        SearchSyncPublisher sync, CancellationToken ct)
+        SearchSyncPublisher sync, KafkaJobEventPublisher kafkaPublisher, CancellationToken ct)
     {
         var (recruiterId, role) = IdentityHelper.GetIdentity(ctx);
         if (recruiterId is null)
@@ -211,18 +217,24 @@ public static class JobEndpoints
         }
 
         await db.SaveChangesAsync(ct);
-        // PBL6-19: best-effort sync, detached from request cancellation (see CreateJob).
+        // PBL6-5: publish job.updated event (Kafka primary, HTTP fallback).
         // Pass the ACTUAL status: Update() never changes it, so a Closed job
         // updated here must stay Closed in the index (search filters Active).
-        await sync.PublishUpsertAsync(SearchSyncPublisher.BuildDocument(
-            job.Id, job.Title, job.Description, job.CompanyId, updateCompany.Name, job.Location,
-            job.SalaryMin, job.SalaryMax, job.SalaryCurrency, job.CategoryId, updateCategory?.Name,
-            job.Requirements, job.Benefits, job.EmploymentType, job.ExperienceLevel, job.RecruiterId,
-            job.Status.ToString()), CancellationToken.None);
+        var updatedEvent = new JobUpdatedEvent(
+            job.Id, job.Title, job.Description, job.CompanyId, updateCompany.Name,
+            job.Location, job.SalaryMin, job.SalaryMax, job.SalaryCurrency,
+            job.CategoryId, updateCategory?.Name, job.EmploymentType, job.ExperienceLevel,
+            job.RecruiterId, job.Requirements, job.Benefits,
+            job.Status.ToString(), DateTime.UtcNow);
+        await kafkaPublisher.PublishJobUpdatedAsync(
+            updatedEvent, updateCompany.Name, updateCategory?.Name,
+            job.Status.ToString(), CancellationToken.None);
         return Results.Ok(new { message = "Job updated" });
     }
 
-    private static async Task<IResult> DeleteJob(Guid id, JobDbContext db, HttpContext ctx, SearchSyncPublisher sync, CancellationToken ct)
+    private static async Task<IResult> DeleteJob(
+        Guid id, JobDbContext db, HttpContext ctx,
+        SearchSyncPublisher sync, KafkaJobEventPublisher kafkaPublisher, CancellationToken ct)
     {
         var (recruiterId, role) = IdentityHelper.GetIdentity(ctx);
         if (recruiterId is null)
@@ -237,9 +249,9 @@ public static class JobEndpoints
 
         job.SoftDelete();
         await db.SaveChangesAsync(ct);
-        // PBL6-19: best-effort removal from search index, detached from request
-        // cancellation (see CreateJob).
-        await sync.PublishDeleteAsync(id, CancellationToken.None);
+        // PBL6-5: publish job.deleted event (Kafka primary, HTTP fallback).
+        // Detached from request cancellation (see CreateJob).
+        await kafkaPublisher.PublishJobDeletedAsync(id, CancellationToken.None);
         return Results.NoContent();
     }
 }

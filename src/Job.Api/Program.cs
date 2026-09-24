@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using SharedKernel;
+using SharedKernel.Kafka;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -61,10 +62,41 @@ if (!builder.Environment.IsDevelopment())
 builder.Services.AddProblemDetails();
 
 // PBL6-19: search sync publisher (direct HTTP to search-svc; disabled when SEARCH_SYNC_URL unset).
+// Also used as HTTP fallback when Kafka circuit-breaker is open (plan 2.3).
 builder.Services.AddHttpClient<SearchSyncPublisher>(client =>
 {
     client.Timeout = TimeSpan.FromSeconds(5);
 });
+
+// PBL6-5: Kafka event publishing (job.created/updated/deleted -> job-events topic).
+// KafkaOptions binds KAFKA_BOOTSTRAP_SERVERS env var; empty = Kafka disabled (HTTP-only sync).
+builder.Services.Configure<KafkaOptions>(o =>
+{
+    o.BootstrapServers = builder.Configuration["KAFKA_BOOTSTRAP_SERVERS"]
+        ?? builder.Configuration["Kafka:BootstrapServers"] ?? "";
+    o.SaslUsername = builder.Configuration["KAFKA_SASL_USERNAME"]
+        ?? builder.Configuration["Kafka:SaslUsername"] ?? "";
+    o.SaslPassword = builder.Configuration["KAFKA_SASL_PASSWORD"]
+        ?? builder.Configuration["Kafka:SaslPassword"] ?? "";
+});
+
+var kafkaServers = builder.Configuration["KAFKA_BOOTSTRAP_SERVERS"]
+    ?? builder.Configuration["Kafka:BootstrapServers"] ?? "";
+
+if (!string.IsNullOrWhiteSpace(kafkaServers))
+{
+    // Kafka configured: register real producer (Singleton — one underlying TCP connection).
+    builder.Services.AddSingleton<IKafkaProducer, KafkaProducerService>();
+}
+else
+{
+    // Kafka not configured: register a no-op producer. Publisher will always HTTP-fallback.
+    builder.Services.AddSingleton<IKafkaProducer, NoOpKafkaProducer>();
+}
+
+// Singleton: circuit-breaker state must persist across requests (plan v3.1).
+builder.Services.AddSingleton<KafkaJobEventPublisher>();
+builder.Services.AddHostedService<KafkaHealthCheckService>();
 
 // MAINT-03: OpenAPI 3.0 (7-eir.md:7.5.3)
 builder.Services.AddEndpointsApiExplorer();
@@ -121,6 +153,19 @@ app.MapJobEndpoints();
 if (string.IsNullOrWhiteSpace(app.Configuration["SEARCH_SYNC_URL"] ?? app.Configuration["SearchSync:Url"]))
 {
     app.Logger.LogWarning("SEARCH_SYNC_URL is not set. Search index sync is DISABLED — jobs will not appear in search results.");
+}
+
+// PBL6-5: Kafka sync status at startup
+if (string.IsNullOrWhiteSpace(kafkaServers))
+{
+    app.Logger.LogWarning(
+        "KAFKA_BOOTSTRAP_SERVERS is not set. Kafka publishing is DISABLED — using HTTP sync only.");
+}
+else
+{
+    app.Logger.LogInformation(
+        "Kafka publishing enabled. BootstrapServers={Servers}, Topic=job-events.",
+        kafkaServers);
 }// Category endpoints (SRS JOB-01-06)
 app.MapCategoryEndpoints();
 
