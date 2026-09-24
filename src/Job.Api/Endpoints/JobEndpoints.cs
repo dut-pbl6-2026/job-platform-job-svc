@@ -43,6 +43,7 @@ public static class JobEndpoints
         JobDbContext db,
         HttpContext ctx,
         SearchSyncPublisher sync,
+        JobEventPublisher events,
         CancellationToken ct)
     {
         var (recruiterId, role) = IdentityHelper.GetIdentity(ctx);
@@ -105,6 +106,8 @@ public static class JobEndpoints
             job.SalaryMin, job.SalaryMax, job.SalaryCurrency, job.CategoryId, category?.Name,
             job.Requirements, job.Benefits, job.EmploymentType, job.ExperienceLevel, job.RecruiterId,
             job.Status.ToString()), CancellationToken.None);
+        // PBL6-34: Kafka job.created (best-effort, detached from request cancellation).
+        await events.PublishCreatedAsync(job, company.Name, category?.Name);
         return Results.Created($"/api/jobs/{job.Id}", new { id = job.Id, message = "Job created" });
     }
 
@@ -166,7 +169,7 @@ public static class JobEndpoints
 
     private static async Task<IResult> UpdateJob(
         Guid id, JobUpdateDto dto, JobDbContext db, HttpContext ctx,
-        SearchSyncPublisher sync, CancellationToken ct)
+        SearchSyncPublisher sync, JobEventPublisher events, CancellationToken ct)
     {
         var (recruiterId, role) = IdentityHelper.GetIdentity(ctx);
         if (recruiterId is null)
@@ -219,10 +222,12 @@ public static class JobEndpoints
             job.SalaryMin, job.SalaryMax, job.SalaryCurrency, job.CategoryId, updateCategory?.Name,
             job.Requirements, job.Benefits, job.EmploymentType, job.ExperienceLevel, job.RecruiterId,
             job.Status.ToString()), CancellationToken.None);
+        // PBL6-34: Kafka job.updated (best-effort, detached from request cancellation).
+        await events.PublishUpdatedAsync(job, updateCompany.Name, updateCategory?.Name);
         return Results.Ok(new { message = "Job updated" });
     }
 
-    private static async Task<IResult> DeleteJob(Guid id, JobDbContext db, HttpContext ctx, SearchSyncPublisher sync, CancellationToken ct)
+    private static async Task<IResult> DeleteJob(Guid id, JobDbContext db, HttpContext ctx, SearchSyncPublisher sync, JobEventPublisher events, CancellationToken ct)
     {
         var (recruiterId, role) = IdentityHelper.GetIdentity(ctx);
         if (recruiterId is null)
@@ -240,6 +245,8 @@ public static class JobEndpoints
         // PBL6-19: best-effort removal from search index, detached from request
         // cancellation (see CreateJob).
         await sync.PublishDeleteAsync(id, CancellationToken.None);
+        // PBL6-34: Kafka job.deleted (best-effort, detached from request cancellation).
+        await events.PublishDeletedAsync(id);
         return Results.NoContent();
     }
 }

@@ -5,8 +5,10 @@ using Job.Api.Services;
 using Job.Infrastructure.Data;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using SharedKernel;
+using SharedKernel.Kafka;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -18,11 +20,19 @@ builder.Logging.AddJsonConsole(o =>
     o.TimestampFormat = "yyyy-MM-ddTHH:mm:ssZ";
 });
 
-// PORT-05: connection string from env — no hardcoded values (PORT-02/SEC-08)
-var conn = builder.Configuration.GetConnectionString("JobDb")
-           ?? builder.Configuration["DATABASE_URL_JOB"]
-           ?? throw new InvalidOperationException(
-               "Connection string not configured. Set DATABASE_URL_JOB env var or ConnectionStrings:JobDb in appsettings.");
+// PORT-05: connection string from env first — appsettings holds a non-empty
+// "<set via ...>" placeholder that must never reach Npgsql (PORT-02/SEC-08).
+static bool IsUnusable(string? v) =>
+    string.IsNullOrWhiteSpace(v)
+    || v.StartsWith("<set via", StringComparison.Ordinal)
+    || v.Contains("${");
+
+var conn = builder.Configuration["DATABASE_URL_JOB"];
+if (IsUnusable(conn))
+    conn = builder.Configuration.GetConnectionString("JobDb");
+if (IsUnusable(conn))
+    throw new InvalidOperationException(
+        "Connection string not configured. Set DATABASE_URL_JOB env var or ConnectionStrings:JobDb in appsettings.");
 
 builder.Services.AddDbContext<JobDbContext>(o => o.UseNpgsql(conn));
 
@@ -65,6 +75,26 @@ builder.Services.AddHttpClient<SearchSyncPublisher>(client =>
 {
     client.Timeout = TimeSpan.FromSeconds(5);
 });
+
+// PBL6-34: Kafka job-events producer (SRS KAFKA-01-01). Graceful degradation:
+// without KAFKA_BOOTSTRAP_SERVERS a no-op producer keeps CRUD working locally.
+builder.Services.Configure<KafkaOptions>(o =>
+{
+    o.BootstrapServers = builder.Configuration["KAFKA_BOOTSTRAP_SERVERS"]
+        ?? builder.Configuration["Kafka:BootstrapServers"] ?? "";
+});
+builder.Services.AddSingleton<IKafkaProducer>(sp =>
+{
+    var options = sp.GetRequiredService<IOptions<KafkaOptions>>();
+    var logger = sp.GetRequiredService<ILogger<KafkaProducerService>>();
+    if (string.IsNullOrWhiteSpace(options.Value.BootstrapServers))
+    {
+        return new NullKafkaProducer(sp.GetRequiredService<ILogger<NullKafkaProducer>>());
+    }
+
+    return new KafkaProducerService(options, logger);
+});
+builder.Services.AddSingleton<JobEventPublisher>();
 
 // MAINT-03: OpenAPI 3.0 (7-eir.md:7.5.3)
 builder.Services.AddEndpointsApiExplorer();
