@@ -45,6 +45,7 @@ public static class JobEndpoints
         HttpContext ctx,
         SearchSyncPublisher sync,
         KafkaJobEventPublisher kafkaPublisher,
+        IConfiguration configuration,
         CancellationToken ct)
     {
         var (recruiterId, role) = IdentityHelper.GetIdentity(ctx);
@@ -84,11 +85,20 @@ public static class JobEndpoints
         JobPosting job;
         try
         {
+            var adminApprovalEnabled =
+                bool.TryParse(configuration["FEATURE_ADMIN_APPROVAL"], out var enabled) && enabled;
             job = new JobPosting(
                 dto.Title, dto.Description, dto.CompanyId, dto.Location,
-                recruiterId.Value, dto.SalaryMin, dto.SalaryMax,
-                dto.SalaryCurrency ?? "VND", dto.CategoryId, dto.Requirements,
-                dto.Benefits, dto.EmploymentType ?? "FullTime", dto.ExperienceLevel ?? "Entry");
+                recruiterId.Value,
+                initialStatus: adminApprovalEnabled ? JobStatus.Pending : JobStatus.Active,
+                salaryMin: dto.SalaryMin,
+                salaryMax: dto.SalaryMax,
+                salaryCurrency: dto.SalaryCurrency ?? "VND",
+                categoryId: dto.CategoryId,
+                requirements: dto.Requirements,
+                benefits: dto.Benefits,
+                employmentType: dto.EmploymentType ?? "FullTime",
+                experienceLevel: dto.ExperienceLevel ?? "Entry");
         }
         catch (ArgumentException ex)
         {

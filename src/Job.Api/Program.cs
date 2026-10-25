@@ -97,6 +97,7 @@ else
 // Singleton: circuit-breaker state must persist across requests (plan v3.1).
 builder.Services.AddSingleton<KafkaJobEventPublisher>();
 builder.Services.AddHostedService<KafkaHealthCheckService>();
+builder.Services.AddHostedService<OutboxPublisherService>();
 
 // MAINT-03: OpenAPI 3.0 (7-eir.md:7.5.3)
 builder.Services.AddEndpointsApiExplorer();
@@ -147,6 +148,7 @@ app.MapGet("/", () => Results.Ok(new { service = "job", version = "0.1.0" }))
 
 // Job CRUD endpoints (SRS JOB-01-01 to JOB-01-05)
 app.MapJobEndpoints();
+app.MapAdminJobEndpoints();
 
 // PBL6-19 (S-2): surface search-sync wiring once at startup — a missing
 // SEARCH_SYNC_URL silently disables indexing, which must never go unnoticed.
