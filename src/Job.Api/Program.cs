@@ -150,6 +150,7 @@ app.MapGet("/", () => Results.Ok(new { service = "job", version = "0.1.0" }))
 // Job CRUD endpoints (SRS JOB-01-01 to JOB-01-05)
 app.MapJobEndpoints();
 app.MapAdminJobEndpoints();
+app.MapInternalStatsEndpoints();
 
 // PBL6-19 (S-2): surface search-sync wiring once at startup — a missing
 // SEARCH_SYNC_URL silently disables indexing, which must never go unnoticed.
