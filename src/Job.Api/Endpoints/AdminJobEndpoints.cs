@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Job.Api.Auth;
 using Job.Api.DTOs;
 using Job.Core.Entities;
@@ -97,11 +97,8 @@ public static class AdminJobEndpoints
         var dtos = items.Select(JobAdminListDto.From).ToList();
         var totalPages = (int)Math.Ceiling((double)total / size);
 
-        return Results.Ok(new
-        {
-            data = dtos,
-            pagination = new { page, pageSize = size, totalItems = total, totalPages }
-        });
+        // Use job-svc PaginatedResponse<T> (consistent with other job-svc endpoints).
+        return Results.Ok(new PaginatedResponse<JobAdminListDto>(dtos, total, page, size, totalPages));
     }
 
     // ── GET /api/admin/jobs/{id} ──────────────────────────────────────────────

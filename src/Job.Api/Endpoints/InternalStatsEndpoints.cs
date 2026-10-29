@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using System.Text;
 using Job.Core.Entities;
 using Job.Infrastructure.Data;
@@ -39,10 +39,11 @@ public static class InternalStatsEndpoints
         if (string.IsNullOrWhiteSpace(expected))
         {
             // Fail closed: an unconfigured token must never turn the endpoint public.
+            // Return 401 (not 503) — "misconfigured" is an auth failure, not a service outage.
             logger.LogError(
-                "{TokenKey} is not configured. /api/internal/stats is unavailable.",
+                "{TokenKey} is not configured. Returning 401 to avoid exposing the endpoint.",
                 TokenConfigKey);
-            return Results.Json(new { message = "Internal stats unavailable." }, statusCode: 503);
+            return Results.Json(new { message = "Unauthorized" }, statusCode: 401);
         }
 
         if (!IsAuthorized(ctx.Request.Headers.Authorization.ToString(), expected))

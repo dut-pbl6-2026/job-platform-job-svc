@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Job.Core.Entities;
 using Job.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -112,8 +112,14 @@ public sealed class OutboxPublisherService : BackgroundService
         {
             if (!string.Equals(outboxEvent.EventType, JobEventTypes.Updated, StringComparison.Ordinal))
             {
-                throw new InvalidOperationException(
-                    $"Unsupported outbox event type '{outboxEvent.EventType}'.");
+                // Unknown event type: log a warning and mark as published to prevent infinite retries.
+                // Do NOT throw — throwing here increments RetryCount and wastes retry budget.
+                _logger.LogWarning(
+                    "OutboxPublisherService: Unknown event type '{EventType}' (OutboxId={OutboxId}). Marking as published to skip permanently.",
+                    outboxEvent.EventType, outboxEvent.Id);
+                outboxEvent.MarkPublished();
+                await db.SaveChangesAsync(ct);
+                return;
             }
 
             var envelope = JsonSerializer.Deserialize<EventEnvelope<JobUpdatedEvent>>(
