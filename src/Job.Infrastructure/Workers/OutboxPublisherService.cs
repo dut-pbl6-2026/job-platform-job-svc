@@ -1,3 +1,5 @@
+using System.Text.Json;
+using Job.Core.Entities;
 using Job.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -5,9 +7,8 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using SharedKernel.Events;
 using SharedKernel.Kafka;
-using System.Text.Json;
 
-namespace Job.Api.Services;
+namespace Job.Infrastructure.Workers;
 
 /// <summary>
 /// BackgroundService that polls the OutboxEvent table and publishes pending events
@@ -26,16 +27,16 @@ public sealed class OutboxPublisherService : BackgroundService
     private static readonly TimeSpan CleanupThreshold = TimeSpan.FromDays(7);
     private const string JobEventsTopic = "job-events";
 
-    private readonly IServiceProvider _services;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly IKafkaProducer _kafkaProducer;
     private readonly ILogger<OutboxPublisherService> _logger;
 
     public OutboxPublisherService(
-        IServiceProvider services,
+        IServiceScopeFactory scopeFactory,
         IKafkaProducer kafkaProducer,
         ILogger<OutboxPublisherService> logger)
     {
-        _services = services;
+        _scopeFactory = scopeFactory;
         _kafkaProducer = kafkaProducer;
         _logger = logger;
     }
@@ -62,7 +63,14 @@ public sealed class OutboxPublisherService : BackgroundService
                     "OutboxPublisherService: Unexpected error in poll loop. Will retry next cycle.");
             }
 
-            await Task.Delay(PollIntervalMs, stoppingToken);
+            try
+            {
+                await Task.Delay(PollIntervalMs, stoppingToken);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
         }
 
         _logger.LogInformation("OutboxPublisherService stopped.");
@@ -70,7 +78,7 @@ public sealed class OutboxPublisherService : BackgroundService
 
     private async Task ProcessBatchAsync(CancellationToken ct)
     {
-        using var scope = _services.CreateScope();
+        using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<JobDbContext>();
 
         // Fetch top unpublished events, skipping those beyond MaxRetries
@@ -96,10 +104,7 @@ public sealed class OutboxPublisherService : BackgroundService
         await CleanupPublishedEventsAsync(db, ct);
     }
 
-    private async Task PublishEventAsync(
-        Job.Core.Entities.OutboxEvent outboxEvent,
-        JobDbContext db,
-        CancellationToken ct)
+    private async Task PublishEventAsync(OutboxEvent outboxEvent, JobDbContext db, CancellationToken ct)
     {
         var key = outboxEvent.AggregateId ?? outboxEvent.Id.ToString();
 
@@ -177,5 +182,4 @@ public sealed class OutboxPublisherService : BackgroundService
                 deleted, CleanupThreshold.Days);
         }
     }
-
 }

@@ -5,6 +5,7 @@ using Job.Core.Entities;
 using Job.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using SharedKernel.Events;
+using SharedKernel.Kafka;
 using JobPosting = Job.Core.Entities.Job;
 
 namespace Job.Api.Endpoints;
@@ -58,18 +59,26 @@ public static class AdminJobEndpoints
 
         // IgnoreQueryFilters: Admin can see all statuses including Pending/Rejected/Deleted
         var query = db.Jobs.IgnoreQueryFilters()
+            .AsNoTracking()
             .Include(j => j.Company)
             .Include(j => j.Category)
             .AsQueryable();
 
         // Filter out Deleted unless explicitly requested
-        if (status is null)
+        if (string.IsNullOrWhiteSpace(status))
         {
             query = query.Where(j => j.Status != JobStatus.Deleted);
         }
-        else if (Enum.TryParse<JobStatus>(status, ignoreCase: true, out var statusEnum))
+        else if (Enum.TryParse<JobStatus>(status, ignoreCase: true, out var statusEnum)
+                 && Enum.IsDefined(statusEnum))
         {
             query = query.Where(j => j.Status == statusEnum);
+        }
+        else
+        {
+            return Results.Json(
+                new { message = $"Invalid status '{status}'. Valid values: {string.Join(", ", Enum.GetNames<JobStatus>())}." },
+                statusCode: 400);
         }
 
         if (companyId.HasValue)
@@ -108,6 +117,7 @@ public static class AdminJobEndpoints
         if (role != "Admin") return ForbiddenResult();
 
         var job = await db.Jobs.IgnoreQueryFilters()
+            .AsNoTracking()
             .Include(j => j.Company)
             .Include(j => j.Category)
             .FirstOrDefaultAsync(j => j.Id == id, ct);
@@ -145,26 +155,14 @@ public static class AdminJobEndpoints
         if (!approveResult.IsSuccess)
             return Results.Json(new { message = approveResult.Error }, statusCode: 400);
 
-        // Build job.updated event payload
-        var updatedEvent = new JobUpdatedEvent(
-            job.Id, job.Title, job.Description, job.CompanyId, job.Company?.Name ?? "",
-            job.Location, job.SalaryMin, job.SalaryMax, job.SalaryCurrency,
-            job.CategoryId, job.Category?.Name, job.EmploymentType, job.ExperienceLevel,
-            job.RecruiterId, job.Requirements, job.Benefits,
-            job.Status.ToString(), DateTime.UtcNow);
-
-        // ATOMIC: job update + outbox event in one transaction
-        db.OutboxEvents.Add(new OutboxEvent(
-            eventType: "job.updated",
-            payload: JsonSerializer.Serialize(
-                SharedKernel.Events.EventEnvelope<JobUpdatedEvent>.Create("job.updated", updatedEvent)),
-            aggregateId: job.Id.ToString()));
+        // ATOMIC: job update + outbox event in one SaveChanges (single DB transaction)
+        db.OutboxEvents.Add(BuildUpdatedOutboxEvent(job));
 
         await db.SaveChangesAsync(ct);
 
         loggerFactory.CreateLogger("AdminJobEndpoints").LogInformation(
-            "Admin {AdminId} approved job {JobId}.",
-            adminId.Value, job.Id);
+            "Admin {AdminId} approved job {JobId}. Note={Note}",
+            adminId.Value, job.Id, body?.Note);
         return Results.Ok(new { message = "Job approved.", jobId = job.Id });
     }
 
@@ -201,20 +199,8 @@ public static class AdminJobEndpoints
         if (!rejectResult.IsSuccess)
             return Results.Json(new { message = rejectResult.Error }, statusCode: 400);
 
-        // Build job.updated event payload
-        var updatedEvent = new JobUpdatedEvent(
-            job.Id, job.Title, job.Description, job.CompanyId, job.Company?.Name ?? "",
-            job.Location, job.SalaryMin, job.SalaryMax, job.SalaryCurrency,
-            job.CategoryId, job.Category?.Name, job.EmploymentType, job.ExperienceLevel,
-            job.RecruiterId, job.Requirements, job.Benefits,
-            job.Status.ToString(), DateTime.UtcNow);
-
-        // ATOMIC: job update + outbox event in one transaction
-        db.OutboxEvents.Add(new OutboxEvent(
-            eventType: "job.updated",
-            payload: JsonSerializer.Serialize(
-                SharedKernel.Events.EventEnvelope<JobUpdatedEvent>.Create("job.updated", updatedEvent)),
-            aggregateId: job.Id.ToString()));
+        // ATOMIC: job update + outbox event in one SaveChanges (single DB transaction)
+        db.OutboxEvents.Add(BuildUpdatedOutboxEvent(job));
 
         await db.SaveChangesAsync(ct);
 
@@ -222,6 +208,28 @@ public static class AdminJobEndpoints
             "Admin {AdminId} rejected job {JobId}.",
             adminId.Value, job.Id);
         return Results.Ok(new { message = "Job rejected.", jobId = job.Id });
+    }
+
+    /// <summary>
+    /// Builds the <c>job.updated</c> outbox record for a job whose status just changed.
+    /// The payload is serialized with <see cref="KafkaJson.Options"/> so the stored
+    /// bytes match what <c>KafkaProducerService</c> writes on the wire.
+    /// </summary>
+    private static OutboxEvent BuildUpdatedOutboxEvent(JobPosting job)
+    {
+        var updatedEvent = new JobUpdatedEvent(
+            job.Id, job.Title, job.Description, job.CompanyId, job.Company?.Name ?? "",
+            job.Location, job.SalaryMin, job.SalaryMax, job.SalaryCurrency,
+            job.CategoryId, job.Category?.Name, job.EmploymentType, job.ExperienceLevel,
+            job.RecruiterId, job.Requirements, job.Benefits,
+            job.Status.ToString(), DateTime.UtcNow);
+
+        return new OutboxEvent(
+            eventType: JobEventTypes.Updated,
+            payload: JsonSerializer.Serialize(
+                EventEnvelope<JobUpdatedEvent>.Create(JobEventTypes.Updated, updatedEvent),
+                KafkaJson.Options),
+            aggregateId: job.Id.ToString());
     }
 }
 

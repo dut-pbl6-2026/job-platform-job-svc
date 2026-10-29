@@ -6,7 +6,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Job.Core/Job.Core.csproj" />
-    <PackageReference Include="JobPlatform.SharedKernel" Version="0.1.0" />
+    <PackageReference Include="JobPlatform.SharedKernel" Version="0.2.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.12" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.4">
       <PrivateAssets>all</PrivateAssets>

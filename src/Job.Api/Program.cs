@@ -3,6 +3,7 @@ using Job.Api.Endpoints;
 using Job.Api.Middleware;
 using Job.Api.Services;
 using Job.Infrastructure.Data;
+using Job.Infrastructure.Workers;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -162,13 +163,26 @@ if (string.IsNullOrWhiteSpace(kafkaServers))
 {
     app.Logger.LogWarning(
         "KAFKA_BOOTSTRAP_SERVERS is not set. Kafka publishing is DISABLED — using HTTP sync only.");
+    app.Logger.LogWarning(
+        "Outbox events (admin approve/reject) cannot be published without Kafka and will exhaust retries.");
 }
 else
 {
     app.Logger.LogInformation(
         "Kafka publishing enabled. BootstrapServers={Servers}, Topic=job-events.",
         kafkaServers);
-}// Category endpoints (SRS JOB-01-06)
+}
+
+// feat(admin): approval workflow is opt-in so existing recruiter flows stay Active by default.
+var adminApprovalEnabled =
+    bool.TryParse(app.Configuration["FEATURE_ADMIN_APPROVAL"], out var approvalFlag) && approvalFlag;
+app.Logger.LogInformation(
+    "Admin approval flow {State}.",
+    adminApprovalEnabled
+        ? "ENABLED — new recruiter jobs start as Pending"
+        : "DISABLED — new recruiter jobs start as Active");
+
+// Category endpoints (SRS JOB-01-06)
 app.MapCategoryEndpoints();
 
 // Company endpoints (SRS D.1 line 220-222)
