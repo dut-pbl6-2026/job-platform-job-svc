@@ -13,6 +13,9 @@ public class JobDbContext : DbContext
     public DbSet<Company> Companies => Set<Company>();
     public DbSet<SavedJob> SavedJobs => Set<SavedJob>();
 
+    // feat(admin): transactional outbox — Slice 3
+    public DbSet<OutboxEvent> OutboxEvents => Set<OutboxEvent>();
+
     protected override void OnModelCreating(ModelBuilder b)
     {
         base.OnModelCreating(b);
@@ -65,8 +68,11 @@ public class JobDbContext : DbContext
                 .HasMaxLength(32)
                 .HasDefaultValue(JobStatus.Active);
 
-            // A2: global query filter — hide Deleted jobs by default (JOB-01-05)
-            e.HasQueryFilter(x => x.Status != JobStatus.Deleted);
+            // feat(admin): Pending/Rejected jobs hidden from public browse by default.
+            // Admin endpoints call .IgnoreQueryFilters() to access them.
+            e.HasQueryFilter(x => x.Status != JobStatus.Deleted
+                                  && x.Status != JobStatus.Pending
+                                  && x.Status != JobStatus.Rejected);
 
             e.Property(x => x.Title).HasMaxLength(256).IsRequired();
             e.Property(x => x.Description).IsRequired();
@@ -77,6 +83,10 @@ public class JobDbContext : DbContext
             e.Property(x => x.EmploymentType).HasMaxLength(64).HasDefaultValue("FullTime");
             e.Property(x => x.ExperienceLevel).HasMaxLength(64).HasDefaultValue("Entry");
             e.Property(x => x.ViewCount).HasDefaultValue(0);
+
+            // feat(admin): rejection/approval fields
+            e.Property(x => x.RejectionReason).HasMaxLength(500);
+
             e.HasOne(x => x.Company)
                 .WithMany()
                 .HasForeignKey(x => x.CompanyId)
@@ -97,6 +107,18 @@ public class JobDbContext : DbContext
                 .WithMany()
                 .HasForeignKey(x => x.JobId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // feat(admin): OutboxEvent table — transactional outbox pattern (Slice 3/4)
+        b.Entity<OutboxEvent>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.EventType).HasMaxLength(128).IsRequired();
+            e.Property(x => x.Payload).IsRequired();
+            e.Property(x => x.AggregateId).HasMaxLength(36);
+            e.Property(x => x.IsPublished).HasDefaultValue(false);
+            // Index for the publisher poll: WHERE IsPublished = false ORDER BY CreatedAt
+            e.HasIndex(x => new { x.IsPublished, x.CreatedAt });
         });
     }
 }

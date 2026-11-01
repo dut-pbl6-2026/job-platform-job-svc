@@ -22,6 +22,18 @@ public class Job : Entity
     public JobStatus Status { get; private set; } = JobStatus.Active;
     public int ViewCount { get; private set; }
 
+    // ── Admin approval fields (feat(admin): Admin APIs — Slice 3) ─────────────
+    /// <summary>Reason provided by admin when rejecting a Pending job.</summary>
+    public string? RejectionReason { get; private set; }
+    /// <summary>UTC timestamp when the job was rejected by an admin.</summary>
+    public DateTime? RejectedAt { get; private set; }
+    /// <summary>Admin user id who rejected the job.</summary>
+    public Guid? RejectedBy { get; private set; }
+    /// <summary>UTC timestamp when the job was approved by an admin.</summary>
+    public DateTime? ApprovedAt { get; private set; }
+    /// <summary>Admin user id who approved the job.</summary>
+    public Guid? ApprovedBy { get; private set; }
+
     private Job() { }
 
     public Job(
@@ -63,6 +75,77 @@ public class Job : Entity
         EmploymentType = employmentType.Trim();
         ExperienceLevel = experienceLevel.Trim();
     }
+
+    /// <summary>
+    /// Overload that lets the application layer pass an explicit initial status.
+    /// Use when FEATURE_ADMIN_APPROVAL is enabled: pass <see cref="JobStatus.Pending"/>
+    /// so new recruiter jobs enter the admin approval queue.
+    /// The domain entity itself never reads configuration (MAINT-01 clean architecture).
+    /// </summary>
+    public Job(
+        string title,
+        string description,
+        Guid companyId,
+        string location,
+        Guid recruiterId,
+        JobStatus initialStatus,
+        decimal? salaryMin = null,
+        decimal? salaryMax = null,
+        string salaryCurrency = "VND",
+        Guid? categoryId = null,
+        string? requirements = null,
+        string? benefits = null,
+        string employmentType = "FullTime",
+        string experienceLevel = "Entry")
+        : this(title, description, companyId, location, recruiterId,
+               salaryMin, salaryMax, salaryCurrency, categoryId,
+               requirements, benefits, employmentType, experienceLevel)
+    {
+        Status = initialStatus;
+    }
+
+    // ── Admin approval domain methods ─────────────────────────────────────────
+
+    /// <summary>
+    /// Transitions a <see cref="JobStatus.Pending"/> job to <see cref="JobStatus.Active"/>.
+    /// Returns <see cref="Result.Failure"/> if the job is not in Pending status.
+    /// Never throws — callers must check <see cref="Result.IsSuccess"/>.
+    /// </summary>
+    public Result ApprovePending(Guid approvedBy)
+    {
+        if (Status != JobStatus.Pending)
+            return Result.Failure("Job is not in Pending status.");
+
+        Status = JobStatus.Active;
+        ApprovedBy = approvedBy;
+        ApprovedAt = DateTime.UtcNow;
+        Touch();
+        return Result.Success();
+    }
+
+    /// <summary>
+    /// Transitions a <see cref="JobStatus.Pending"/> job to <see cref="JobStatus.Rejected"/>.
+    /// Returns <see cref="Result.Failure"/> if the job is not in Pending status or reason fails validation.
+    /// Never throws — callers must check <see cref="Result.IsSuccess"/>.
+    /// </summary>
+    public Result RejectPending(string reason, Guid rejectedBy)
+    {
+        if (Status != JobStatus.Pending)
+            return Result.Failure("Job is not in Pending status.");
+        if (string.IsNullOrWhiteSpace(reason))
+            return Result.Failure("Rejection reason is required.");
+        if (reason.Length > 500)
+            return Result.Failure("Rejection reason must not exceed 500 characters.");
+
+        Status = JobStatus.Rejected;
+        RejectionReason = reason.Trim();
+        RejectedBy = rejectedBy;
+        RejectedAt = DateTime.UtcNow;
+        Touch();
+        return Result.Success();
+    }
+
+    // ── Existing methods ──────────────────────────────────────────────────────
 
     public void Update(
         string title,

@@ -1,14 +1,36 @@
-name: ci
-on: { push: { branches: [main] }, pull_request: { branches: [main] } }
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-dotnet@v4
         with: { dotnet-version: '10.0.100' }
-      - run: dotnet tool install --global dotnet-ef --version 10.0.0
-      - run: dotnet format --verify-no-changes JobService.sln
-      - run: dotnet build JobService.sln --warnaserror
-      - run: dotnet test JobService.sln --no-build
-      - run: dotnet ef migrations has-pending-model-changes --project src/Job.Infrastructure/Job.Infrastructure.csproj --startup-project src/Job.Api/Job.Api.csproj || echo "check migrations"
+
+      - name: Install EF Core CLI
+        run: |
+          dotnet tool install --global dotnet-ef --version 10.0.12
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: Restore dependencies
+        run: dotnet restore JobService.sln
+
+      - name: Verify formatting
+        run: dotnet format JobService.sln --no-restore --verify-no-changes
+
+      - name: Build
+        run: dotnet build JobService.sln --no-restore --warnaserror
+
+      - name: Test
+        run: dotnet test JobService.sln --no-build --no-restore
+
+      - name: Check EF model is migrated
+        run: dotnet ef migrations has-pending-model-changes --project src/Job.Infrastructure/Job.Infrastructure.csproj --startup-project src/Job.Api/Job.Api.csproj --no-build
