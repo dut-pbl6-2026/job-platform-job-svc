@@ -79,7 +79,7 @@ docker run -p 5002:5002 --env-file .env job
 
 ## Health, logging and code quality
 
-- `GET /health` — cheap liveness, always `{"status":"ok","service":"job"}` (Render `healthCheckPath`).
+- `GET /health` — cheap liveness, always `{"status":"ok","service":"job"}`.
 - `GET /health/ready` — readiness: Postgres (`CanConnect`, 3s timeout) and Kafka circuit-breaker state. `503` only when a check is unhealthy; Kafka down is `degraded` (HTTP sync fallback).
 - Logging via Serilog: compact JSON console in non-Development, request logging, `ServiceName` enricher, `X-Correlation-Id` (generated if absent, echoed in the response). Secrets and `Authorization` headers are never logged.
 - SonarCloud (optional): `ci.yml` job `sonarcloud` analyses `dut-pbl6-2026_job-platform-job-svc` only when the `SONAR_TOKEN` repo secret exists; otherwise it skips.
@@ -93,6 +93,3 @@ docker run -p 5002:5002 --env-file .env job
 
 `feature/* → main` (see `job-platform-docs/.github/git-strategy.md`).
 
-## Deploy (Render Free jp-job — TM2 Thanh)
-- Service: `jp-job` `https://jp-job.onrender.com` `5002`
-- Hook: `RENDER_DEPLOY_HOOK_JOB` → `push main` auto
