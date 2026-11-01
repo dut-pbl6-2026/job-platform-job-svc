@@ -60,7 +60,7 @@ if (!builder.Environment.IsDevelopment())
     builder.Services.AddAuthorization();
 }
 
-// REL-07: ProblemDetails for RFC 7807 error responses (7-eir.md:7.7.1)
+// Monitoring: expose OpenTelemetry metrics on /metrics (Prometheus scrape target).
 builder.Services.AddOpenTelemetry()
     .WithMetrics(metrics =>
     {
@@ -71,6 +71,7 @@ builder.Services.AddOpenTelemetry()
             .AddPrometheusExporter();
     });
 
+// REL-07: ProblemDetails for RFC 7807 error responses (7-eir.md:7.7.1)
 builder.Services.AddProblemDetails();
 
 // PBL6-19: search sync publisher (direct HTTP to search-svc; disabled when SEARCH_SYNC_URL unset).
@@ -150,7 +151,13 @@ else
     app.UseAuthorization();
 }
 
-app.MapPrometheusScrapingEndpoint();
+// Monitoring: /metrics is meant for the internal scrape network; keep it off in
+// Production unless METRICS_ENABLED=true (all services are publicly reachable).
+if (app.Configuration.GetValue("METRICS_ENABLED", !app.Environment.IsProduction()))
+{
+    app.MapPrometheusScrapingEndpoint();
+}
+
 // REL-06: health check endpoint per service (6-nfr.md:REL-06, 8-system-architecture.md)
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "job" }))
    .WithTags("Health")
