@@ -63,12 +63,12 @@ public sealed class InternalStatsEndpointTests : IDisposable
     }
 
     [Fact]
-    public async Task GetStats_MissingConfiguredToken_Returns503()
+    public async Task GetStats_MissingConfiguredToken_Returns401()
     {
         var result = await Invoke(Context("Bearer anything"), configuredToken: null);
 
         var status = Assert.IsAssignableFrom<IStatusCodeHttpResult>(result);
-        Assert.Equal(503, status.StatusCode);
+        Assert.Equal(401, status.StatusCode);
     }
 
     [Fact]

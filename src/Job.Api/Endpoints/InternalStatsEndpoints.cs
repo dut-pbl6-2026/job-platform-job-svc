@@ -88,10 +88,12 @@ public static class InternalStatsEndpoints
             return false;
         }
 
-        // Constant-time comparison — do not leak token length/prefix via timing.
+        // Hash both sides first so the compared arrays are always the same length
+        // (FixedTimeEquals returns early on a length mismatch, which would leak the
+        // expected token's length), then compare in constant time.
         return CryptographicOperations.FixedTimeEquals(
-            Encoding.UTF8.GetBytes(token),
-            Encoding.UTF8.GetBytes(expected));
+            SHA256.HashData(Encoding.UTF8.GetBytes(token)),
+            SHA256.HashData(Encoding.UTF8.GetBytes(expected)));
     }
 }
 
