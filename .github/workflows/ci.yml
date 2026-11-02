@@ -34,3 +34,69 @@ jobs:
 
       - name: Check EF model is migrated
         run: dotnet ef migrations has-pending-model-changes --project src/Job.Infrastructure/Job.Infrastructure.csproj --startup-project src/Job.Api/Job.Api.csproj --no-build
+
+  # PBL6-50: optional SonarCloud analysis. Runs the scan only when the SONAR_TOKEN secret exists
+  # (not available to fork PRs / unconfigured repos) — otherwise the job is a clean no-op.
+  sonarcloud:
+    runs-on: ubuntu-latest
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    steps:
+      - name: Check SonarCloud token
+        id: sonar
+        run: |
+          if [ -n "$SONAR_TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "SONAR_TOKEN not available - skipping SonarCloud analysis."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.sonar.outputs.enabled == 'true'
+        with: { fetch-depth: 0 } # full history for accurate blame / new-code detection
+
+      - uses: actions/setup-dotnet@v4
+        if: steps.sonar.outputs.enabled == 'true'
+        with: { dotnet-version: '10.0.100' }
+
+      - uses: actions/setup-java@v4
+        if: steps.sonar.outputs.enabled == 'true'
+        with: { distribution: temurin, java-version: '17' }
+
+      - name: Install dotnet-sonarscanner
+        if: steps.sonar.outputs.enabled == 'true'
+        run: |
+          dotnet tool install --global dotnet-sonarscanner
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: Restore dependencies
+        if: steps.sonar.outputs.enabled == 'true'
+        run: dotnet restore JobService.sln
+
+      - name: SonarCloud begin
+        if: steps.sonar.outputs.enabled == 'true'
+        run: >
+          dotnet sonarscanner begin
+          /k:"dut-pbl6-2026_job-platform-job-svc"
+          /o:"dut-pbl6-2026"
+          /d:sonar.token="$SONAR_TOKEN"
+          /d:sonar.host.url="https://sonarcloud.io"
+          /d:sonar.cs.opencover.reportsPaths="**/coverage.opencover.xml"
+          /d:sonar.exclusions="**/Migrations/**"
+          /d:sonar.coverage.exclusions="**/Migrations/**,**/Program.cs"
+
+      - name: Build
+        if: steps.sonar.outputs.enabled == 'true'
+        run: dotnet build JobService.sln --no-restore
+
+      - name: Test with coverage
+        if: steps.sonar.outputs.enabled == 'true'
+        run: >
+          dotnet test JobService.sln --no-build --no-restore
+          --collect:"XPlat Code Coverage"
+          -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover
+
+      - name: SonarCloud end
+        if: steps.sonar.outputs.enabled == 'true'
+        run: dotnet sonarscanner end /d:sonar.token="$SONAR_TOKEN"

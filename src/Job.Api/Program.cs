@@ -1,5 +1,7 @@
 using System.Text;
 using Job.Api.Endpoints;
+using Job.Api.Health;
+using Job.Api.Observability;
 using Job.Api.Middleware;
 using Job.Api.Services;
 using Job.Infrastructure.Data;
@@ -12,13 +14,8 @@ using SharedKernel.Kafka;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// MAINT-06: structured JSON logging (ILogger JSON format ERROR/WARN/INFO/DEBUG)
-builder.Logging.ClearProviders();
-builder.Logging.AddJsonConsole(o =>
-{
-    o.IncludeScopes = true;
-    o.TimestampFormat = "yyyy-MM-ddTHH:mm:ssZ";
-});
+// MAINT-06: Serilog structured logging + correlation id (PBL6-49)
+builder.AddObservability();
 
 // PORT-05: connection string from env — no hardcoded values (PORT-02/SEC-08)
 var conn = builder.Configuration.GetConnectionString("JobDb")
@@ -27,6 +24,7 @@ var conn = builder.Configuration.GetConnectionString("JobDb")
                "Connection string not configured. Set DATABASE_URL_JOB env var or ConnectionStrings:JobDb in appsettings.");
 
 builder.Services.AddDbContext<JobDbContext>(o => o.UseNpgsql(conn));
+builder.Services.AddJobHealthChecks();
 
 // === Auth config — Production uses JWT Bearer; Dev uses DevAuthMiddleware ===
 // (git-strategy AGENTS.md JWT section)
@@ -123,6 +121,8 @@ builder.Services.AddSwaggerGen(o =>
 
 var app = builder.Build();
 
+app.UseObservability();
+
 // REL-07: UseExceptionHandler maps unhandled exceptions → ProblemDetails JSON
 app.UseExceptionHandler();
 
@@ -140,9 +140,7 @@ else
 }
 
 // REL-06: health check endpoint per service (6-nfr.md:REL-06, 8-system-architecture.md)
-app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "job" }))
-   .WithTags("Health")
-   .ExcludeFromDescription();
+app.MapJobHealth();
 
 app.MapGet("/", () => Results.Ok(new { service = "job", version = "0.1.0" }))
    .ExcludeFromDescription();
