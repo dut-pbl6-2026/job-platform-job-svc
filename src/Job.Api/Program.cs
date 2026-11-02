@@ -115,18 +115,18 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(o =>
 {
     o.SwaggerDoc("v1", new() { Title = "Job Service", Version = "v0.1.0" });
-    o.AddSecurityDefinition("X-User-Id", new()
+    o.AddSecurityDefinition("X-User-Id", new Microsoft.OpenApi.OpenApiSecurityScheme
     {
-        In = Microsoft.OpenApi.Models.ParameterLocation.Header,
+        In = Microsoft.OpenApi.ParameterLocation.Header,
         Name = "X-User-Id",
-        Type = Microsoft.OpenApi.Models.SecuritySchemeType.ApiKey,
+        Type = Microsoft.OpenApi.SecuritySchemeType.ApiKey,
         Description = "Dev-only: paste a UUID here (also add X-User-Role header manually)"
     });
-    o.AddSecurityDefinition("X-User-Role", new()
+    o.AddSecurityDefinition("X-User-Role", new Microsoft.OpenApi.OpenApiSecurityScheme
     {
-        In = Microsoft.OpenApi.Models.ParameterLocation.Header,
+        In = Microsoft.OpenApi.ParameterLocation.Header,
         Name = "X-User-Role",
-        Type = Microsoft.OpenApi.Models.SecuritySchemeType.ApiKey,
+        Type = Microsoft.OpenApi.SecuritySchemeType.ApiKey,
         Description = "Dev-only: Recruiter | User (gateway forwards X-User-Id / X-User-Role per GW-01)"
     });
 });
