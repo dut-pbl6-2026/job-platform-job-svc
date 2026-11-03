@@ -1,23 +1,22 @@
 using System.Text;
 using Job.Api.Endpoints;
+using Job.Api.Health;
+using Job.Api.Observability;
 using Job.Api.Middleware;
 using Job.Api.Services;
 using Job.Infrastructure.Data;
+using Job.Infrastructure.Workers;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using SharedKernel;
 using SharedKernel.Kafka;
+using OpenTelemetry.Metrics;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// MAINT-06: structured JSON logging (ILogger JSON format ERROR/WARN/INFO/DEBUG)
-builder.Logging.ClearProviders();
-builder.Logging.AddJsonConsole(o =>
-{
-    o.IncludeScopes = true;
-    o.TimestampFormat = "yyyy-MM-ddTHH:mm:ssZ";
-});
+// MAINT-06: Serilog structured logging + correlation id (PBL6-49)
+builder.AddObservability();
 
 // PORT-05: connection string from env — no hardcoded values (PORT-02/SEC-08)
 var conn = builder.Configuration.GetConnectionString("JobDb")
@@ -26,6 +25,7 @@ var conn = builder.Configuration.GetConnectionString("JobDb")
                "Connection string not configured. Set DATABASE_URL_JOB env var or ConnectionStrings:JobDb in appsettings.");
 
 builder.Services.AddDbContext<JobDbContext>(o => o.UseNpgsql(conn));
+builder.Services.AddJobHealthChecks();
 
 // === Auth config — Production uses JWT Bearer; Dev uses DevAuthMiddleware ===
 // (git-strategy AGENTS.md JWT section)
@@ -57,6 +57,17 @@ if (!builder.Environment.IsDevelopment())
         });
     builder.Services.AddAuthorization();
 }
+
+// Monitoring: expose OpenTelemetry metrics on /metrics (Prometheus scrape target).
+builder.Services.AddOpenTelemetry()
+    .WithMetrics(metrics =>
+    {
+        metrics
+            .AddAspNetCoreInstrumentation()
+            .AddHttpClientInstrumentation()
+            .AddRuntimeInstrumentation()
+            .AddPrometheusExporter();
+    });
 
 // REL-07: ProblemDetails for RFC 7807 error responses (7-eir.md:7.7.1)
 builder.Services.AddProblemDetails();
@@ -97,29 +108,32 @@ else
 // Singleton: circuit-breaker state must persist across requests (plan v3.1).
 builder.Services.AddSingleton<KafkaJobEventPublisher>();
 builder.Services.AddHostedService<KafkaHealthCheckService>();
+builder.Services.AddHostedService<OutboxPublisherService>();
 
 // MAINT-03: OpenAPI 3.0 (7-eir.md:7.5.3)
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(o =>
 {
     o.SwaggerDoc("v1", new() { Title = "Job Service", Version = "v0.1.0" });
-    o.AddSecurityDefinition("X-User-Id", new()
+    o.AddSecurityDefinition("X-User-Id", new Microsoft.OpenApi.OpenApiSecurityScheme
     {
-        In = Microsoft.OpenApi.Models.ParameterLocation.Header,
+        In = Microsoft.OpenApi.ParameterLocation.Header,
         Name = "X-User-Id",
-        Type = Microsoft.OpenApi.Models.SecuritySchemeType.ApiKey,
+        Type = Microsoft.OpenApi.SecuritySchemeType.ApiKey,
         Description = "Dev-only: paste a UUID here (also add X-User-Role header manually)"
     });
-    o.AddSecurityDefinition("X-User-Role", new()
+    o.AddSecurityDefinition("X-User-Role", new Microsoft.OpenApi.OpenApiSecurityScheme
     {
-        In = Microsoft.OpenApi.Models.ParameterLocation.Header,
+        In = Microsoft.OpenApi.ParameterLocation.Header,
         Name = "X-User-Role",
-        Type = Microsoft.OpenApi.Models.SecuritySchemeType.ApiKey,
+        Type = Microsoft.OpenApi.SecuritySchemeType.ApiKey,
         Description = "Dev-only: Recruiter | User (gateway forwards X-User-Id / X-User-Role per GW-01)"
     });
 });
 
 var app = builder.Build();
+
+app.UseObservability();
 
 // REL-07: UseExceptionHandler maps unhandled exceptions → ProblemDetails JSON
 app.UseExceptionHandler();
@@ -137,16 +151,23 @@ else
     app.UseAuthorization();
 }
 
+// Monitoring: /metrics is meant for the internal scrape network; keep it off in
+// Production unless METRICS_ENABLED=true (all services are publicly reachable).
+if (app.Configuration.GetValue("METRICS_ENABLED", !app.Environment.IsProduction()))
+{
+    app.MapPrometheusScrapingEndpoint();
+}
+
 // REL-06: health check endpoint per service (6-nfr.md:REL-06, 8-system-architecture.md)
-app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "job" }))
-   .WithTags("Health")
-   .ExcludeFromDescription();
+app.MapJobHealth();
 
 app.MapGet("/", () => Results.Ok(new { service = "job", version = "0.1.0" }))
    .ExcludeFromDescription();
 
 // Job CRUD endpoints (SRS JOB-01-01 to JOB-01-05)
 app.MapJobEndpoints();
+app.MapAdminJobEndpoints();
+app.MapInternalStatsEndpoints();
 
 // PBL6-19 (S-2): surface search-sync wiring once at startup — a missing
 // SEARCH_SYNC_URL silently disables indexing, which must never go unnoticed.
@@ -160,13 +181,26 @@ if (string.IsNullOrWhiteSpace(kafkaServers))
 {
     app.Logger.LogWarning(
         "KAFKA_BOOTSTRAP_SERVERS is not set. Kafka publishing is DISABLED — using HTTP sync only.");
+    app.Logger.LogWarning(
+        "Outbox events (admin approve/reject) cannot be published without Kafka and will exhaust retries.");
 }
 else
 {
     app.Logger.LogInformation(
         "Kafka publishing enabled. BootstrapServers={Servers}, Topic=job-events.",
         kafkaServers);
-}// Category endpoints (SRS JOB-01-06)
+}
+
+// feat(admin): approval workflow is opt-in so existing recruiter flows stay Active by default.
+var adminApprovalEnabled =
+    bool.TryParse(app.Configuration["FEATURE_ADMIN_APPROVAL"], out var approvalFlag) && approvalFlag;
+app.Logger.LogInformation(
+    "Admin approval flow {State}.",
+    adminApprovalEnabled
+        ? "ENABLED — new recruiter jobs start as Pending"
+        : "DISABLED — new recruiter jobs start as Active");
+
+// Category endpoints (SRS JOB-01-06)
 app.MapCategoryEndpoints();
 
 // Company endpoints (SRS D.1 line 220-222)
