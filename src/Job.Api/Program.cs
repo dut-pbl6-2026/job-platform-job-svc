@@ -25,11 +25,19 @@ static string? Usable(string? value) =>
     string.IsNullOrWhiteSpace(value) || value.TrimStart().StartsWith('<') ? null : value;
 
 var conn = Usable(builder.Configuration.GetConnectionString("JobDb"))
-           ?? Usable(builder.Configuration["DATABASE_URL_JOB"])
-           ?? throw new InvalidOperationException(
-               "Connection string not configured. Set DATABASE_URL_JOB env var or ConnectionStrings:JobDb in appsettings.");
+           ?? Usable(builder.Configuration["DATABASE_URL_JOB"]);
 
-builder.Services.AddDbContext<JobDbContext>(o => o.UseNpgsql(conn));
+// `dotnet ef` design-time commands (e.g. has-pending-model-changes in CI / mise ef-check) build the
+// host without DB env vars and never open a connection — register Npgsql without a connection string.
+if (conn is null && !EF.IsDesignTime)
+    throw new InvalidOperationException(
+        "Connection string not configured. Set DATABASE_URL_JOB env var or ConnectionStrings:JobDb in appsettings.");
+
+builder.Services.AddDbContext<JobDbContext>(o =>
+{
+    if (conn is null) o.UseNpgsql();
+    else o.UseNpgsql(conn);
+});
 builder.Services.AddJobHealthChecks();
 
 // === Auth config — Production uses JWT Bearer; Dev uses DevAuthMiddleware ===
