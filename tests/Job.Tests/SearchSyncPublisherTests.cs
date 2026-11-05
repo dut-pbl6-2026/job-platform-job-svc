@@ -138,6 +138,24 @@ public class SearchSyncPublisherTests
     }
 
     [Fact]
+    public async Task PublishUpsertAsync_SendsOriginalCreatedAt()
+    {
+        var handler = new CapturingHandler();
+        var publisher = CreatePublisher(handler, "http://search:5003");
+        var created = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+
+        await publisher.PublishUpsertAsync(SearchSyncPublisher.BuildDocument(
+            Guid.NewGuid(), "Backend Dev", "Build APIs", Guid.NewGuid(), "Acme",
+            "Da Nang", null, null, "VND", null, null, null, null,
+            "FullTime", "Entry", Guid.NewGuid(), "Active", created));
+
+        var json = Assert.Single(handler.RequestBodies);
+        Assert.NotNull(json);
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal(created, doc.RootElement.GetProperty("createdAt").GetDateTime().ToUniversalTime());
+    }
+
+    [Fact]
     public void BuildDocument_PreservesAllFields()
     {
         var jobId = Guid.NewGuid();

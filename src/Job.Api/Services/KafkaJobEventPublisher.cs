@@ -74,7 +74,7 @@ public sealed class KafkaJobEventPublisher : IDisposable
             payload.SalaryMin, payload.SalaryMax, payload.Currency,
             payload.CategoryId, categoryName, payload.Requirements, payload.Benefits,
             payload.EmploymentType, payload.ExperienceLevel, payload.RecruiterId,
-            status, key, JobEventTypes.Created, ct);
+            status, payload.CreatedAt, key, JobEventTypes.Created, ct);
     }
 
     /// <summary>
@@ -98,7 +98,7 @@ public sealed class KafkaJobEventPublisher : IDisposable
             payload.SalaryMin, payload.SalaryMax, payload.Currency,
             payload.CategoryId, categoryName, payload.Requirements, payload.Benefits,
             payload.EmploymentType, payload.ExperienceLevel, payload.RecruiterId,
-            status, key, JobEventTypes.Updated, ct);
+            status, payload.CreatedAt, key, JobEventTypes.Updated, ct);
     }
 
     /// <summary>
@@ -200,14 +200,14 @@ public sealed class KafkaJobEventPublisher : IDisposable
         string location, decimal? salaryMin, decimal? salaryMax, string currency,
         Guid? categoryId, string? categoryName, string? requirements, string? benefits,
         string employmentType, string experienceLevel, Guid recruiterId,
-        string status, string key, string eventType, CancellationToken ct)
+        string status, DateTime? createdAt, string key, string eventType, CancellationToken ct)
     {
         try
         {
             var doc = SearchSyncPublisher.BuildDocument(
                 jobId, title, description, companyId, companyName, location,
                 salaryMin, salaryMax, currency, categoryId, categoryName,
-                requirements, benefits, employmentType, experienceLevel, recruiterId, status);
+                requirements, benefits, employmentType, experienceLevel, recruiterId, status, createdAt);
             await _httpFallback.PublishUpsertAsync(doc, ct);
             _logger.LogWarning(
                 "Kafka circuit open. Fallback HTTP upsert succeeded for JobId={JobId} EventType={EventType}.",

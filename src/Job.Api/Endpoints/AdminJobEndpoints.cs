@@ -222,7 +222,7 @@ public static class AdminJobEndpoints
             job.Location, job.SalaryMin, job.SalaryMax, job.SalaryCurrency,
             job.CategoryId, job.Category?.Name, job.EmploymentType, job.ExperienceLevel,
             job.RecruiterId, job.Requirements, job.Benefits,
-            job.Status.ToString(), DateTime.UtcNow);
+            job.Status.ToString(), DateTime.UtcNow, job.CreatedAt);
 
         return new OutboxEvent(
             eventType: JobEventTypes.Updated,
