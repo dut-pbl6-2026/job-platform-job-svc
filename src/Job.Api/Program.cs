@@ -19,8 +19,13 @@ var builder = WebApplication.CreateBuilder(args);
 builder.AddObservability();
 
 // PORT-05: connection string from env — no hardcoded values (PORT-02/SEC-08)
-var conn = builder.Configuration.GetConnectionString("JobDb")
-           ?? builder.Configuration["DATABASE_URL_JOB"]
+// appsettings*.json ship a "<set via ...>" placeholder for ConnectionStrings:JobDb; skip it
+// (and blanks) so DATABASE_URL_JOB is used instead of handing the placeholder to Npgsql.
+static string? Usable(string? value) =>
+    string.IsNullOrWhiteSpace(value) || value.TrimStart().StartsWith('<') ? null : value;
+
+var conn = Usable(builder.Configuration.GetConnectionString("JobDb"))
+           ?? Usable(builder.Configuration["DATABASE_URL_JOB"])
            ?? throw new InvalidOperationException(
                "Connection string not configured. Set DATABASE_URL_JOB env var or ConnectionStrings:JobDb in appsettings.");
 
