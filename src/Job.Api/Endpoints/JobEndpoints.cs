@@ -117,7 +117,7 @@ public static class JobEndpoints
             job.Location, job.SalaryMin, job.SalaryMax, job.SalaryCurrency,
             job.CategoryId, category?.Name, job.EmploymentType, job.ExperienceLevel,
             job.RecruiterId, job.Requirements, job.Benefits,
-            job.Status.ToString(), DateTime.UtcNow);
+            job.Status.ToString(), DateTime.UtcNow, job.CreatedAt);
         await kafkaPublisher.PublishJobCreatedAsync(
             createdEvent, company.Name, category?.Name,
             job.Status.ToString(), CancellationToken.None);
@@ -235,7 +235,7 @@ public static class JobEndpoints
             job.Location, job.SalaryMin, job.SalaryMax, job.SalaryCurrency,
             job.CategoryId, updateCategory?.Name, job.EmploymentType, job.ExperienceLevel,
             job.RecruiterId, job.Requirements, job.Benefits,
-            job.Status.ToString(), DateTime.UtcNow);
+            job.Status.ToString(), DateTime.UtcNow, job.CreatedAt);
         await kafkaPublisher.PublishJobUpdatedAsync(
             updatedEvent, updateCompany.Name, updateCategory?.Name,
             job.Status.ToString(), CancellationToken.None);

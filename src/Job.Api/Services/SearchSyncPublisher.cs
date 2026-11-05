@@ -9,6 +9,8 @@ namespace Job.Api.Services;
 /// search-svc binds case-insensitively, so both casings are accepted.
 /// A record (not a string-keyed dictionary) keeps the contract compiler-checked:
 /// renaming a property breaks the build instead of silently dropping a field.
+/// <c>CreatedAt</c> is the job's original creation time: search-svc keeps it as
+/// the "posted at" date (sort "Mới nhất") instead of stamping the sync time.
 /// </summary>
 public sealed record JobSyncPayload(
     string Id,
@@ -27,7 +29,8 @@ public sealed record JobSyncPayload(
     string Status,
     string RecruiterId,
     string? Requirements,
-    string? Benefits);
+    string? Benefits,
+    DateTime? CreatedAt = null);
 
 /// <summary>
 /// Publishes job documents to search-svc index endpoints (PBL6-19 HTTP sync path).
@@ -138,7 +141,8 @@ public class SearchSyncPublisher
         Guid jobId, string title, string description, Guid companyId, string? companyName,
         string location, decimal? salaryMin, decimal? salaryMax, string currency,
         Guid? categoryId, string? categoryName, string? requirements, string? benefits,
-        string employmentType, string experienceLevel, Guid recruiterId, string status) => new(
+        string employmentType, string experienceLevel, Guid recruiterId, string status,
+        DateTime? createdAt = null) => new(
             Id: jobId.ToString(),
             Title: title,
             Description: description,
@@ -155,5 +159,6 @@ public class SearchSyncPublisher
             Status: status,
             RecruiterId: recruiterId.ToString(),
             Requirements: requirements,
-            Benefits: benefits);
+            Benefits: benefits,
+            CreatedAt: createdAt);
 }

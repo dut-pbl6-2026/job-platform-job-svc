@@ -172,6 +172,9 @@ public sealed class AdminJobEndpointTests : IDisposable
             outbox.Payload, KafkaJson.Options)!;
         Assert.Equal(JobEventTypes.Updated, envelope.EventType);
         Assert.Equal("Active", envelope.Payload.Status);
+        // Approval is a job.updated: it must carry the original creation time, not "now",
+        // or search-svc would move the job to the top of "Mới nhất".
+        Assert.Equal(job.CreatedAt, envelope.Payload.CreatedAt);
     }
 
     [Fact]
