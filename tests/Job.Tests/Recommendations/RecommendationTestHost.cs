@@ -70,6 +70,7 @@ internal sealed class RecommendationTestHost : IAsyncDisposable
         app.UseExceptionHandler();
         app.UseMiddleware<DevAuthMiddleware>();
         app.MapJobEndpoints();
+        app.MapRecommendationEndpoints();
         app.MapCompanyEndpoints();
         app.MapCategoryEndpoints();
         await app.StartAsync();
@@ -151,12 +152,16 @@ internal sealed class RecommendationTestHost : IAsyncDisposable
     }
 
     /// <summary>Calls the service directly (slice 4); endpoint tests use <see cref="Client"/>.</summary>
-    public async Task<RecommendationResult> RecommendAsync(Guid userId, int limit = 10)
+    public async Task<RecommendationResult> RecommendAsync(Guid userId, int limit = 10, bool refresh = false)
     {
         using var scope = _app.Services.CreateScope();
         return await scope.ServiceProvider.GetRequiredService<RecommendationService>()
-            .GetAsync(userId, limit, CancellationToken.None);
+            .GetAsync(userId, limit, refresh, CancellationToken.None);
     }
+
+    /// <summary>GET /api/jobs/recommended as a job seeker.</summary>
+    public Task<HttpResponseMessage> GetRecommendedAsync(Guid userId, string query = "", string role = "User") =>
+        Client.SendAsync(Request(HttpMethod.Get, "/api/jobs/recommended" + query, userId, role));
 
     public static HttpRequestMessage Request(HttpMethod method, string url, Guid? userId, string? role)
     {

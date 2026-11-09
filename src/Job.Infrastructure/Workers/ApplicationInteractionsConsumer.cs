@@ -74,6 +74,11 @@ public class ApplicationInteractionsConsumer : KafkaConsumerService
             var inserted = await writer.UpsertAsync(
                 payload.ApplicantId, payload.JobId, InteractionType.Applied,
                 payload.ApplicationId, payload.OccurredAt, ct);
+            if (inserted)
+            {
+                // The user's history changed: their cached ranking is stale.
+                scope.ServiceProvider.GetService<RecommendationCache>()?.Invalidate(payload.ApplicantId);
+            }
 
             _logger.LogDebug(
                 "{EventType} {EventId}: interaction {Result} for job {JobId}.",

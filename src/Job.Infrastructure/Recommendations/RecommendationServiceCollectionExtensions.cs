@@ -20,6 +20,7 @@ public static class RecommendationServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<RecommendationOptions>, RecommendationOptionsValidator>());
         services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<RecommendationCache>();
         services.TryAddScoped<InteractionWriter>();
         services.TryAddScoped<RecommendationService>();
         return services;

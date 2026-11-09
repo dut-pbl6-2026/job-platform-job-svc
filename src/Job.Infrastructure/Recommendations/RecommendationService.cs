@@ -36,20 +36,34 @@ public sealed class RecommendationService
     private const int PopularPoolSize = 100;
 
     private readonly JobDbContext _db;
+    private readonly RecommendationCache _cache;
     private readonly RecommendationOptions _options;
     private readonly TimeProvider _time;
 
-    public RecommendationService(JobDbContext db, IOptions<RecommendationOptions> options, TimeProvider time)
+    public RecommendationService(
+        JobDbContext db, RecommendationCache cache, IOptions<RecommendationOptions> options, TimeProvider time)
     {
         _db = db;
+        _cache = cache;
         _options = options.Value;
         _time = time;
     }
 
-    /// <summary>Computes the ranking and loads the jobs.</summary>
-    public async Task<RecommendationResult> GetAsync(Guid userId, int limit, CancellationToken ct)
+    /// <summary>
+    /// Serves the user's cached ranking when present (job details are reloaded, so jobs that
+    /// stopped being Active drop out); otherwise computes and caches it. <paramref name="refresh"/>
+    /// forces a recompute at most once per <see cref="RecommendationCache.RefreshCooldown"/>.
+    /// </summary>
+    public async Task<RecommendationResult> GetAsync(Guid userId, int limit, bool refresh, CancellationToken ct)
     {
+        var forced = refresh && _cache.TryBeginRefresh(userId);
+        if (!forced && _cache.TryGet(userId, out var cached))
+        {
+            return new RecommendationResult(await HydrateAsync(cached.Entries, limit, ct), IsCached: true, cached.GeneratedAt);
+        }
+
         var snapshot = await ComputeAsync(userId, ct);
+        _cache.Set(userId, snapshot);
         return new RecommendationResult(await HydrateAsync(snapshot.Entries, limit, ct), IsCached: false, snapshot.GeneratedAt);
     }
 
@@ -283,7 +297,7 @@ public sealed class RecommendationService
         HashSet<Guid> chosen,
         CancellationToken ct)
     {
-        var popular = await ComputePopularAsync(ct);
+        var popular = await _cache.GetOrAddPopularAsync(() => ComputePopularAsync(ct));
         foreach (var jobId in popular)
         {
             if (entries.Count >= MaxItems)

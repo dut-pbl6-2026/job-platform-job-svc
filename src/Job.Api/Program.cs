@@ -187,6 +187,7 @@ app.MapGet("/", () => Results.Ok(new { service = "job", version = "0.1.0" }))
 
 // Job CRUD endpoints (SRS JOB-01-01 to JOB-01-05)
 app.MapJobEndpoints();
+app.MapRecommendationEndpoints();
 app.MapAdminJobEndpoints();
 app.MapInternalStatsEndpoints();
 
