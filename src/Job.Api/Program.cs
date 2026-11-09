@@ -6,6 +6,7 @@ using Job.Api.Middleware;
 using Job.Api.Services;
 using Job.Infrastructure.Clients;
 using Job.Infrastructure.Data;
+using Job.Infrastructure.Observability;
 using Job.Infrastructure.Recommendations;
 using Job.Infrastructure.Workers;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -81,6 +82,7 @@ builder.Services.AddOpenTelemetry()
             .AddAspNetCoreInstrumentation()
             .AddHttpClientInstrumentation()
             .AddRuntimeInstrumentation()
+            .AddMeter(RecommendationMetrics.MeterName) // PBL6-10
             .AddPrometheusExporter();
     });
 

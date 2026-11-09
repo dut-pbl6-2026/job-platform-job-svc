@@ -1,7 +1,9 @@
 using Job.Core.Entities;
 using Job.Core.Recommendations;
 using Job.Infrastructure.Data;
+using Job.Infrastructure.Observability;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using JobPosting = Job.Core.Entities.Job;
 
@@ -39,14 +41,20 @@ public sealed class RecommendationService
     private readonly RecommendationCache _cache;
     private readonly RecommendationOptions _options;
     private readonly TimeProvider _time;
+    private readonly ILogger<RecommendationService> _logger;
 
     public RecommendationService(
-        JobDbContext db, RecommendationCache cache, IOptions<RecommendationOptions> options, TimeProvider time)
+        JobDbContext db,
+        RecommendationCache cache,
+        IOptions<RecommendationOptions> options,
+        TimeProvider time,
+        ILogger<RecommendationService> logger)
     {
         _db = db;
         _cache = cache;
         _options = options.Value;
         _time = time;
+        _logger = logger;
     }
 
     /// <summary>
@@ -56,15 +64,33 @@ public sealed class RecommendationService
     /// </summary>
     public async Task<RecommendationResult> GetAsync(Guid userId, int limit, bool refresh, CancellationToken ct)
     {
+        var started = _time.GetTimestamp();
         var forced = refresh && _cache.TryBeginRefresh(userId);
+        RecommendationResult result;
         if (!forced && _cache.TryGet(userId, out var cached))
         {
-            return new RecommendationResult(await HydrateAsync(cached.Entries, limit, ct), IsCached: true, cached.GeneratedAt);
+            RecommendationMetrics.CacheHit();
+            result = new RecommendationResult(await HydrateAsync(cached.Entries, limit, ct), IsCached: true, cached.GeneratedAt);
+        }
+        else
+        {
+            RecommendationMetrics.CacheMiss();
+            var snapshot = await ComputeAsync(userId, ct);
+            _cache.Set(userId, snapshot);
+            result = new RecommendationResult(await HydrateAsync(snapshot.Entries, limit, ct), IsCached: false, snapshot.GeneratedAt);
+            _logger.LogInformation(
+                "Recommendations computed{Forced}: {Collaborative} collaborative, {Content} content, {Popular} popular in {ElapsedMs:F0} ms.",
+                forced ? " (refresh)" : "",
+                snapshot.Entries.Count(e => e.Strategy == RecommendationStrategy.Collaborative),
+                snapshot.Entries.Count(e => e.Strategy == RecommendationStrategy.Content),
+                snapshot.Entries.Count(e => e.Strategy == RecommendationStrategy.Popular),
+                _time.GetElapsedTime(started).TotalMilliseconds);
         }
 
-        var snapshot = await ComputeAsync(userId, ct);
-        _cache.Set(userId, snapshot);
-        return new RecommendationResult(await HydrateAsync(snapshot.Entries, limit, ct), IsCached: false, snapshot.GeneratedAt);
+        foreach (var item in result.Items)
+            RecommendationMetrics.ServedItem(item.Strategy);
+        RecommendationMetrics.RequestDuration(_time.GetElapsedTime(started), result.IsCached);
+        return result;
     }
 
     /// <summary>Ranks up to <see cref="MaxItems"/> jobs for the user.</summary>

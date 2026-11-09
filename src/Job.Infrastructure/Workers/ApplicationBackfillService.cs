@@ -1,5 +1,6 @@
 using Job.Core.Entities;
 using Job.Infrastructure.Clients;
+using Job.Infrastructure.Observability;
 using Job.Infrastructure.Recommendations;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -93,7 +94,9 @@ public sealed class ApplicationBackfillService : BackgroundService
                     "Recommendation backfill page {Page}: skipped {Invalid} invalid items.", page, result.Page.InvalidItems);
             }
 
-            inserted += await StoreAsync(result.Page.Items, ct);
+            var stored = await StoreAsync(result.Page.Items, ct);
+            inserted += stored;
+            RecommendationMetrics.BackfillRows(stored);
 
             var emptyPage = result.Page.Items.Count == 0 && result.Page.InvalidItems == 0;
             if (emptyPage || page >= result.Page.TotalPages - 1)
