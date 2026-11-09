@@ -5,6 +5,7 @@ using Job.Api.Observability;
 using Job.Api.Middleware;
 using Job.Api.Services;
 using Job.Infrastructure.Data;
+using Job.Infrastructure.Recommendations;
 using Job.Infrastructure.Workers;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
@@ -122,6 +123,13 @@ else
 builder.Services.AddSingleton<KafkaJobEventPublisher>();
 builder.Services.AddHostedService<KafkaHealthCheckService>();
 builder.Services.AddHostedService<OutboxPublisherService>();
+
+// PBL6-10: recommendation read model. The consumer runs only when Kafka is configured.
+builder.Services.AddScoped<InteractionWriter>();
+if (!string.IsNullOrWhiteSpace(kafkaServers))
+{
+    builder.Services.AddHostedService<ApplicationInteractionsConsumer>();
+}
 
 // MAINT-03: OpenAPI 3.0 (7-eir.md:7.5.3)
 builder.Services.AddEndpointsApiExplorer();
