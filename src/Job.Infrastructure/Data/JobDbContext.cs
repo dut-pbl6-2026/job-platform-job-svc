@@ -16,6 +16,9 @@ public class JobDbContext : DbContext
     // feat(admin): transactional outbox — Slice 3
     public DbSet<OutboxEvent> OutboxEvents => Set<OutboxEvent>();
 
+    // PBL6-10: recommendation read model fed by app-svc application events + backfill.
+    public DbSet<JobInteraction> JobInteractions => Set<JobInteraction>();
+
     protected override void OnModelCreating(ModelBuilder b)
     {
         base.OnModelCreating(b);
@@ -119,6 +122,18 @@ public class JobDbContext : DbContext
             e.Property(x => x.IsPublished).HasDefaultValue(false);
             // Index for the publisher poll: WHERE IsPublished = false ORDER BY CreatedAt
             e.HasIndex(x => new { x.IsPublished, x.CreatedAt });
+        });
+
+        // PBL6-10: no FK to Jobs on purpose — rows come from another service's events and
+        // may arrive before/after the job changes; readers filter on Active jobs.
+        b.Entity<JobInteraction>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Type).HasConversion<string>().HasMaxLength(32);
+            // Idempotency: InteractionWriter relies on this index (ON CONFLICT DO NOTHING).
+            // Also serves per-user lookups (UserId is the leading column).
+            e.HasIndex(x => new { x.UserId, x.JobId, x.Type }).IsUnique();
+            e.HasIndex(x => x.JobId);
         });
     }
 }
