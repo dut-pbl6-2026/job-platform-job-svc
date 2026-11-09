@@ -125,7 +125,7 @@ builder.Services.AddHostedService<KafkaHealthCheckService>();
 builder.Services.AddHostedService<OutboxPublisherService>();
 
 // PBL6-10: recommendation read model. The consumer runs only when Kafka is configured.
-builder.Services.AddScoped<InteractionWriter>();
+builder.Services.AddRecommendations();
 if (!string.IsNullOrWhiteSpace(kafkaServers))
 {
     builder.Services.AddHostedService<ApplicationInteractionsConsumer>();

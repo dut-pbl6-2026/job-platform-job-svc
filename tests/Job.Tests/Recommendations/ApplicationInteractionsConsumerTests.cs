@@ -1,13 +1,8 @@
-using System.Text.Json;
 using Job.Core.Entities;
 using Job.Infrastructure.Data;
 using Job.Infrastructure.Recommendations;
-using Job.Infrastructure.Workers;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 using SharedKernel.Events;
 using SharedKernel.Kafka;
 
@@ -20,7 +15,7 @@ namespace Job.Tests.Recommendations;
 public sealed class ApplicationInteractionsConsumerTests : IDisposable
 {
     private readonly ServiceProvider _services;
-    private readonly TestConsumer _consumer;
+    private readonly TestApplicationConsumer _consumer;
 
     public ApplicationInteractionsConsumerTests()
     {
@@ -29,7 +24,7 @@ public sealed class ApplicationInteractionsConsumerTests : IDisposable
             .AddDbContext<JobDbContext>(o => o.UseInMemoryDatabase(dbName))
             .AddScoped<InteractionWriter>()
             .BuildServiceProvider();
-        _consumer = new TestConsumer(_services);
+        _consumer = new TestApplicationConsumer(_services);
     }
 
     public void Dispose() => _services.Dispose();
@@ -142,7 +137,7 @@ public sealed class ApplicationInteractionsConsumerTests : IDisposable
             .AddDbContext<JobDbContext>(o => o.UseNpgsql("Host=127.0.0.1;Port=1;Timeout=1;Command Timeout=1"))
             .AddScoped<InteractionWriter>()
             .BuildServiceProvider();
-        var consumer = new TestConsumer(broken);
+        var consumer = new TestApplicationConsumer(broken);
 
         var outcome = await consumer.Handle(Submitted(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), DateTime.UtcNow));
 
@@ -156,26 +151,10 @@ public sealed class ApplicationInteractionsConsumerTests : IDisposable
     }
 
     private static string Submitted(Guid applicationId, Guid jobId, Guid applicantId, DateTime occurredAt) =>
-        Serialize(EventEnvelope<ApplicationSubmittedEvent>.Create(
-            ApplicationEventTypes.Submitted,
-            new ApplicationSubmittedEvent(applicationId, jobId, "Lập trình viên .NET", applicantId, occurredAt)));
+        TestApplicationConsumer.Submitted(applicationId, jobId, applicantId, occurredAt);
 
     private static string StatusChanged(Guid applicationId, Guid jobId, Guid applicantId, DateTime occurredAt) =>
-        Serialize(EventEnvelope<ApplicationStatusChangedEvent>.Create(
-            ApplicationEventTypes.StatusChanged,
-            new ApplicationStatusChangedEvent(
-                applicationId, jobId, "Lập trình viên .NET", applicantId, "Pending", "Reviewed", Guid.NewGuid(), occurredAt)));
+        TestApplicationConsumer.StatusChanged(applicationId, jobId, applicantId, occurredAt);
 
-    private static string Serialize<T>(EventEnvelope<T> envelope) => JsonSerializer.Serialize(envelope, KafkaJson.Options);
-
-    /// <summary>Exposes the protected handler; the consume loop itself belongs to SharedKernel.</summary>
-    private sealed class TestConsumer(IServiceProvider services) : ApplicationInteractionsConsumer(
-        Options.Create(new KafkaOptions { BootstrapServers = "" }),
-        new ConfigurationBuilder().Build(),
-        services.GetRequiredService<IServiceScopeFactory>(),
-        NullLogger<ApplicationInteractionsConsumer>.Instance)
-    {
-        public Task<MessageOutcome> Handle(string value) =>
-            HandleMessageAsync(key: null, value, CancellationToken.None);
-    }
+    private static string Serialize<T>(EventEnvelope<T> envelope) => TestApplicationConsumer.Serialize(envelope);
 }
