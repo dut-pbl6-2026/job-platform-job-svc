@@ -4,6 +4,7 @@ using Job.Api.Health;
 using Job.Api.Observability;
 using Job.Api.Middleware;
 using Job.Api.Services;
+using Job.Infrastructure.Clients;
 using Job.Infrastructure.Data;
 using Job.Infrastructure.Recommendations;
 using Job.Infrastructure.Workers;
@@ -130,6 +131,10 @@ if (!string.IsNullOrWhiteSpace(kafkaServers))
 {
     builder.Services.AddHostedService<ApplicationInteractionsConsumer>();
 }
+
+// One-time startup backfill from app-svc; no-op unless RECOMMENDATION_BACKFILL_ENABLED=true.
+builder.Services.AddHttpClient<AppServiceClient>(client => client.Timeout = TimeSpan.FromSeconds(10));
+builder.Services.AddHostedService<ApplicationBackfillService>();
 
 // MAINT-03: OpenAPI 3.0 (7-eir.md:7.5.3)
 builder.Services.AddEndpointsApiExplorer();
