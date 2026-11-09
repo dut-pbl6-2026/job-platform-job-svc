@@ -4,7 +4,10 @@ using Job.Api.Health;
 using Job.Api.Observability;
 using Job.Api.Middleware;
 using Job.Api.Services;
+using Job.Infrastructure.Clients;
 using Job.Infrastructure.Data;
+using Job.Infrastructure.Observability;
+using Job.Infrastructure.Recommendations;
 using Job.Infrastructure.Workers;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
@@ -79,6 +82,7 @@ builder.Services.AddOpenTelemetry()
             .AddAspNetCoreInstrumentation()
             .AddHttpClientInstrumentation()
             .AddRuntimeInstrumentation()
+            .AddMeter(RecommendationMetrics.MeterName) // PBL6-10
             .AddPrometheusExporter();
     });
 
@@ -122,6 +126,17 @@ else
 builder.Services.AddSingleton<KafkaJobEventPublisher>();
 builder.Services.AddHostedService<KafkaHealthCheckService>();
 builder.Services.AddHostedService<OutboxPublisherService>();
+
+// PBL6-10: recommendation read model. The consumer runs only when Kafka is configured.
+builder.Services.AddRecommendations();
+if (!string.IsNullOrWhiteSpace(kafkaServers))
+{
+    builder.Services.AddHostedService<ApplicationInteractionsConsumer>();
+}
+
+// One-time startup backfill from app-svc; no-op unless RECOMMENDATION_BACKFILL_ENABLED=true.
+builder.Services.AddHttpClient<AppServiceClient>(client => client.Timeout = TimeSpan.FromSeconds(10));
+builder.Services.AddHostedService<ApplicationBackfillService>();
 
 // MAINT-03: OpenAPI 3.0 (7-eir.md:7.5.3)
 builder.Services.AddEndpointsApiExplorer();
@@ -179,6 +194,7 @@ app.MapGet("/", () => Results.Ok(new { service = "job", version = "0.1.0" }))
 
 // Job CRUD endpoints (SRS JOB-01-01 to JOB-01-05)
 app.MapJobEndpoints();
+app.MapRecommendationEndpoints();
 app.MapAdminJobEndpoints();
 app.MapInternalStatsEndpoints();
 
