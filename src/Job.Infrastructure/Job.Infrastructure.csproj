@@ -5,6 +5,7 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="StackExchange.Redis" Version="3.4.35" />
     <ProjectReference Include="../Job.Core/Job.Core.csproj" />
     <PackageReference Include="JobPlatform.SharedKernel" Version="0.3.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.12" />

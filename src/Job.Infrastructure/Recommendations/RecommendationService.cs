@@ -67,7 +67,8 @@ public sealed class RecommendationService
         var started = _time.GetTimestamp();
         var forced = refresh && _cache.TryBeginRefresh(userId);
         RecommendationResult result;
-        if (!forced && _cache.TryGet(userId, out var cached))
+        var cached = forced ? null : await _cache.GetAsync(userId, ct);
+        if (cached is not null)
         {
             RecommendationMetrics.CacheHit();
             result = new RecommendationResult(await HydrateAsync(cached.Entries, limit, ct), IsCached: true, cached.GeneratedAt);
@@ -76,7 +77,7 @@ public sealed class RecommendationService
         {
             RecommendationMetrics.CacheMiss();
             var snapshot = await ComputeAsync(userId, ct);
-            _cache.Set(userId, snapshot);
+            await _cache.SetAsync(userId, snapshot, ct);
             result = new RecommendationResult(await HydrateAsync(snapshot.Entries, limit, ct), IsCached: false, snapshot.GeneratedAt);
             _logger.LogInformation(
                 "Recommendations computed{Forced}: {Collaborative} collaborative, {Content} content, {Popular} popular in {ElapsedMs:F0} ms.",
