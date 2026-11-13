@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
+using StackExchange.Redis;
 
 namespace Job.Infrastructure.Recommendations;
 
@@ -12,7 +13,7 @@ public static class RecommendationServiceCollectionExtensions
     /// Registers options (validated at startup), the interaction writer and the service.
     /// The Kafka consumer and the backfill are registered by the host, depending on config.
     /// </summary>
-    public static IServiceCollection AddRecommendations(this IServiceCollection services)
+    public static IServiceCollection AddRecommendations(this IServiceCollection services, IConfiguration? configuration = null)
     {
         services.AddOptions<RecommendationOptions>()
             .Configure<IConfiguration>(RecommendationOptions.Bind)
@@ -23,6 +24,18 @@ public static class RecommendationServiceCollectionExtensions
         services.TryAddSingleton<RecommendationCache>();
         services.TryAddScoped<InteractionWriter>();
         services.TryAddScoped<RecommendationService>();
+
+        var redisUrl = configuration?["REDIS_URL"];
+        if (!string.IsNullOrWhiteSpace(redisUrl))
+        {
+            services.TryAddSingleton<IConnectionMultiplexer>(_ =>
+            {
+                var options = ConfigurationOptions.Parse(redisUrl);
+                options.AbortOnConnectFail = false;
+                options.BacklogPolicy = BacklogPolicy.FailFast;
+                return ConnectionMultiplexer.Connect(options);
+            });
+        }
         return services;
     }
 
