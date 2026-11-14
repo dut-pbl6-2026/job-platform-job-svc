@@ -1,5 +1,8 @@
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using StackExchange.Redis;
+using System.Text.Json;
 
 namespace Job.Infrastructure.Recommendations;
 
@@ -19,25 +22,74 @@ public sealed class RecommendationCache : IDisposable
     private readonly MemoryCache _cache = new(new MemoryCacheOptions { SizeLimit = MaxEntries });
     private readonly RecommendationOptions _options;
 
-    public RecommendationCache(IOptions<RecommendationOptions> options) => _options = options.Value;
+    private readonly IDatabase? _redis;
 
-    public bool TryGet(Guid userId, out RecommendationSnapshot snapshot)
+    private readonly ILogger<RecommendationCache> _logger;
+
+    public RecommendationCache(
+        IOptions<RecommendationOptions> options,
+        ILogger<RecommendationCache> logger,
+        IConnectionMultiplexer? connection = null)
     {
-        if (_cache.TryGetValue(UserKey(userId), out RecommendationSnapshot? cached) && cached is not null)
-        {
-            snapshot = cached;
-            return true;
-        }
-
-        snapshot = null!;
-        return false;
+        _options = options.Value;
+        _logger = logger;
+        _redis = connection?.GetDatabase();
     }
 
-    public void Set(Guid userId, RecommendationSnapshot snapshot) =>
-        _cache.Set(UserKey(userId), snapshot, Entry(TimeSpan.FromHours(_options.CacheTtlHours)));
+    public async Task<RecommendationSnapshot?> GetAsync(Guid userId, CancellationToken ct)
+    {
+        var key = UserKey(userId);
 
-    /// <summary>Drops the user's cached ranking (called when one of their interactions arrives).</summary>
-    public void Invalidate(Guid userId) => _cache.Remove(UserKey(userId));
+        if (_redis is null)
+            return _cache.TryGetValue<RecommendationSnapshot>(key, out var cached) ? cached : null;
+
+        try
+        {
+            var value = await _redis.StringGetAsync(key).WaitAsync(TimeSpan.FromMilliseconds(50), ct);
+            return value.IsNull ? null : JsonSerializer.Deserialize<RecommendationSnapshot>(value.ToString());
+        }
+        catch (Exception ex) when (ex is RedisException or TimeoutException or JsonException)
+        {
+            _logger.LogWarning(ex, "Could not read recommendation cache. Treating as a cache miss.");
+            return null;
+        }
+    }
+
+    public async Task SetAsync(
+      Guid userId, RecommendationSnapshot snapshot, CancellationToken ct)
+    {
+        var key = UserKey(userId);
+        var ttl = TimeSpan.FromHours(_options.CacheTtlHours);
+
+        if (_redis is null)
+        {
+            _cache.Set(key, snapshot, Entry(ttl));
+            return;
+        }
+
+        try
+        {
+            await _redis.StringSetAsync(key, JsonSerializer.Serialize(snapshot), ttl)
+              .WaitAsync(TimeSpan.FromMilliseconds(50), ct);
+        }
+        catch (Exception ex) when (ex is RedisException or TimeoutException)
+        {
+            _logger.LogWarning(ex, "Could not write recommendation cache.");
+        }
+    }
+
+    public async Task InvalidateAsync(Guid userId, CancellationToken ct)
+    {
+        var key = UserKey(userId);
+
+        if (_redis is null)
+        {
+            _cache.Remove(key);
+            return;
+        }
+
+        await _redis.KeyDeleteAsync(key).WaitAsync(ct);
+    }
 
     /// <summary>
     /// True when a forced refresh may run now; marks the user so further refreshes within
@@ -67,7 +119,6 @@ public sealed class RecommendationCache : IDisposable
     private static MemoryCacheEntryOptions Entry(TimeSpan ttl) =>
         new() { AbsoluteExpirationRelativeToNow = ttl, Size = 1 };
 
-    private static string UserKey(Guid userId) => $"rec:v1:{userId}";
-
+    private static string UserKey(Guid userId) => $"recommend:{userId:D}";
     private static string RefreshKey(Guid userId) => $"rec:refresh:{userId}";
 }
