@@ -123,6 +123,23 @@ public sealed class AdminJobEndpointTests : IDisposable
     // ── GET /api/admin/jobs/{id} ──────────────────────────────────────────────
 
     [Fact]
+    public async Task GetAdminJobs_TitleSearch_IsCaseInsensitive()
+    {
+        _db.Jobs.Add(NewJob(JobStatus.Active));
+        _db.Jobs.Add(new JobPosting("Kế toán tổng hợp", "Sổ sách", _companyId, "Hà Nội", Guid.NewGuid(),
+            initialStatus: JobStatus.Active));
+        await _db.SaveChangesAsync();
+
+        var result = await AdminJobEndpointInvoker.GetAdminJobs(
+            _db, BuildContext(_adminId, "Admin"), q: "  backend ");
+
+        var data = ResultJson(result)["data"]!.AsArray();
+        Assert.Single(data);
+        Assert.Equal("Backend Developer", data[0]!["title"]!.GetValue<string>());
+        Assert.Equal("Da Nang", data[0]!["location"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task GetAdminJobById_PendingJob_Returns200()
     {
         var job = NewJob(JobStatus.Pending);
@@ -346,8 +363,9 @@ internal static class AdminJobEndpointInvoker
         Guid? companyId = null,
         Guid? categoryId = null,
         int page = 1,
-        int size = 20) =>
-        InvokeAsync(GetAdminJobsMethod, db, ctx, status, companyId, categoryId, page, size,
+        int size = 20,
+        string? q = null) =>
+        InvokeAsync(GetAdminJobsMethod, db, ctx, status, q, companyId, categoryId, page, size,
             CancellationToken.None);
 
     public static Task<IResult> GetAdminJobById(

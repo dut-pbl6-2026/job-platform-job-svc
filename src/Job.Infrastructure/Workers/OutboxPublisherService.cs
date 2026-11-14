@@ -121,7 +121,7 @@ public sealed class OutboxPublisherService : BackgroundService
                 ?? throw new InvalidOperationException(
                     $"Outbox event {outboxEvent.Id} has an empty payload.");
 
-            await _kafkaProducer.ProduceAsync(JobEventsTopic, key, envelope, ct);
+            await PublishCurrentStateAsync(envelope.Payload.JobId, key, db, ct);
 
             outboxEvent.MarkPublished();
             await db.SaveChangesAsync(ct);
@@ -153,6 +153,40 @@ public sealed class OutboxPublisherService : BackgroundService
                     outboxEvent.EventType, outboxEvent.Id, outboxEvent.RetryCount, remaining);
             }
         }
+    }
+
+    /// <summary>
+    /// Publishes the job as it is NOW, not the snapshot stored in the outbox row.
+    /// The outbox is polled every few seconds, while recruiter update/delete go to
+    /// Kafka directly. A stale snapshot published after a direct <c>job.deleted</c>
+    /// (approve, then delete within one poll interval) re-indexed the deleted job as
+    /// Active in search-svc: it showed on the home board and its detail page 404'd.
+    /// A job that is soft-deleted or no longer exists is published as <c>job.deleted</c>.
+    /// </summary>
+    private async Task PublishCurrentStateAsync(Guid jobId, string key, JobDbContext db, CancellationToken ct)
+    {
+        var job = await db.Jobs.IgnoreQueryFilters()
+            .AsNoTracking()
+            .Include(j => j.Company)
+            .Include(j => j.Category)
+            .FirstOrDefaultAsync(j => j.Id == jobId, ct);
+
+        if (job is null || job.Status == JobStatus.Deleted)
+        {
+            var deleted = EventEnvelope<JobDeletedEvent>.Create(
+                JobEventTypes.Deleted, new JobDeletedEvent(jobId, DateTime.UtcNow));
+            await _kafkaProducer.ProduceAsync(JobEventsTopic, key, deleted, ct);
+            return;
+        }
+
+        var current = new JobUpdatedEvent(
+            job.Id, job.Title, job.Description, job.CompanyId, job.Company?.Name ?? "",
+            job.Location, job.SalaryMin, job.SalaryMax, job.SalaryCurrency,
+            job.CategoryId, job.Category?.Name, job.EmploymentType, job.ExperienceLevel,
+            job.RecruiterId, job.Requirements, job.Benefits,
+            job.Status.ToString(), DateTime.UtcNow, job.CreatedAt);
+        await _kafkaProducer.ProduceAsync(
+            JobEventsTopic, key, EventEnvelope<JobUpdatedEvent>.Create(JobEventTypes.Updated, current), ct);
     }
 
     private async Task CleanupPublishedEventsAsync(JobDbContext db, CancellationToken ct)
