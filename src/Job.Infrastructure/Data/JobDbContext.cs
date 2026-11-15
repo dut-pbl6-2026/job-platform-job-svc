@@ -19,6 +19,9 @@ public class JobDbContext : DbContext
     // PBL6-10: recommendation read model fed by app-svc application events + backfill.
     public DbSet<JobInteraction> JobInteractions => Set<JobInteraction>();
 
+    // SRS AUTH-01-09: recruiter invite codes (hashed, single use, 7-day expiry).
+    public DbSet<InviteCode> InviteCodes => Set<InviteCode>();
+
     protected override void OnModelCreating(ModelBuilder b)
     {
         base.OnModelCreating(b);
@@ -137,6 +140,18 @@ public class JobDbContext : DbContext
             // Also serves per-user lookups (UserId is the leading column).
             e.HasIndex(x => new { x.UserId, x.JobId, x.Type }).IsUnique();
             e.HasIndex(x => x.JobId);
+        });
+
+        // SRS AUTH-01-09: only the SHA-256 hash is stored. Unique hash makes lookups exact and
+        // stops two codes with the same digest from coexisting. Partial index not used: the
+        // lookup filters on used_at/expires_at after the hash match.
+        b.Entity<InviteCode>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.CodeHash).HasMaxLength(64).IsRequired();
+            e.HasIndex(x => x.CodeHash).IsUnique();
+            e.HasIndex(x => x.CompanyId);
+            e.HasOne<Company>().WithMany().HasForeignKey(x => x.CompanyId).OnDelete(DeleteBehavior.Restrict);
         });
     }
 }
