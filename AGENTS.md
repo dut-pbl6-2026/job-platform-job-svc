@@ -22,7 +22,7 @@ Agent uses `mise exec -- dotnet ...` / `mise exec -- infisical ...` due to non-i
 ## Architecture — clean Api/Core/Infrastructure
 
 ```
-src/Job.Api            → Web API (Program.cs JWT Bearer + Swagger + /health + auto-migrate)
+src/Job.Api            → Web API (Program.cs JWT Bearer + Swagger + /health; `migrate` one-off command)
 src/Job.Core           → Domain (Job, Category, Company, SavedJob : Entity)
 src/Job.Infrastructure → Data (JobDbContext Npgsql, Migrations) + Services
 tests/Job.Tests        → xunit
@@ -58,14 +58,14 @@ Validate in `Program.cs` (when JWT Bearer is added in W2): `ValidateIssuer=true 
 
 - Retry 3× with exponential backoff on transient DB errors (Polly or EF resilience strategy — add in W2 with Kafka).
 - DB pooling: `MaxPoolSize=20` via connection string env (`DATABASE_URL_JOB`), not hardcoded.
-- Fail-fast on startup migrate failure (`Program.cs`): always `throw` — unmigrated DB → all requests 500.
+- Schema migration is a separate deploy step: `dotnet Job.Api.dll migrate` (`Bootstrap/MigrateCommand.cs`) exits non-zero on failure; the web host never migrates on startup. An unmigrated DB → requests fail, so the compose `job-migrate` service must succeed before `job` starts.
 
 ## Data — EF Core (NFR `6-nfr.md:MAINT`)
 
 - `JobDbContext: DbSet<Job,Category,Company,SavedJob>` `UseNpgsql(ConnectionStrings:JobDb / DATABASE_URL_JOB)`.
 - Fluent: `Category Name unique 128 required Description`, `Company Name unique 256 TaxCode unique nullable Verified default false LogoUrl Website Description Address Industry Size`, `Job Title 256 required Description required CompanyId FK Location SalaryMin SalaryMax SalaryCurrency CategoryId FK Requirements Benefits EmploymentType 64 ExperienceLevel 64 RecruiterId Status(JobStatus enum → string 32) HasQueryFilter(Status!=Deleted) ViewCount default 0`, `SavedJob UserId JobId FK` (SRS `saved_at` = `Entity.CreatedAt`, no extra column).
-- Migrations `src/Job.Infrastructure/Data/Migrations/` — `mise run ef-check` in PR+CI, auto-migrate on startup with `ILogger`.
-- Seed predefined categories on startup (IT, Finance, Marketing, Healthcare, Education, Engineering, Sales, Hospitality, Others).
+- Migrations `src/Job.Infrastructure/Data/Migrations/` — `mise run ef-check` in PR+CI, applied by the `migrate` command.
+- Seed predefined categories in the `migrate` command, idempotent (IT, Finance, Marketing, Healthcare, Education, Engineering, Sales, Hospitality, Others).
 
 ## API Response Standards (7-eir.md:7.7)
 

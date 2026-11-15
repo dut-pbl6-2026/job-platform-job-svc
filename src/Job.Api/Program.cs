@@ -1,4 +1,5 @@
 using System.Text;
+using Job.Api.Bootstrap;
 using Job.Api.Endpoints;
 using Job.Api.Health;
 using Job.Api.Observability;
@@ -35,6 +36,11 @@ var conn = Usable(builder.Configuration.GetConnectionString("JobDb"))
 if (conn is null && !EF.IsDesignTime)
     throw new InvalidOperationException(
         "Connection string not configured. Set DATABASE_URL_JOB env var or ConnectionStrings:JobDb in appsettings.");
+
+// Schema migration is a separate deploy step: `migrate` applies pending migrations, seeds categories and exits.
+// The web host never migrates on startup. Checked before any other service registration.
+if (MigrateCommand.IsInvoked(args))
+    return await MigrateCommand.RunAsync(args, conn, Console.Out, Console.Error);
 
 builder.Services.AddDbContext<JobDbContext>(o =>
 {
@@ -218,25 +224,6 @@ app.MapCategoryEndpoints();
 // Company endpoints (SRS D.1 line 220-222)
 app.MapCompanyEndpoints();
 
-// REL-01: auto-migrate on startup with fail-fast (no swallow in any environment)
-using (var scope = app.Services.CreateScope())
-{
-    var logger = scope.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
-    var db = scope.ServiceProvider.GetRequiredService<JobDbContext>();
-
-    try
-    {
-        await db.Database.MigrateAsync();
-        await SeedData.SeedCategoriesAsync(db);
-        logger.LogInformation("DB migrated and categories seeded");
-    }
-    catch (Exception ex)
-    {
-        // M4/REL-01: Fail-fast — unmigrated DB → every request 500.
-        // Always throw; container orchestrator will restart with correct state.
-        logger.LogError(ex, "DB migrate/seed failed — shutting down");
-        throw;
-    }
-}
-
 app.Run();
+
+return 0;
