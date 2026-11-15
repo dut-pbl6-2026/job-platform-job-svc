@@ -1,12 +1,9 @@
-using System.Text.Json;
 using Job.Api.Auth;
 using Job.Api.DTOs;
-using Job.Api.Services;
 using Job.Core.Entities;
 using Job.Infrastructure.Data;
+using Job.Infrastructure.Outbox;
 using Microsoft.EntityFrameworkCore;
-using SharedKernel.Events;
-using SharedKernel.Kafka;
 using JobPosting = Job.Core.Entities.Job;
 
 namespace Job.Api.Endpoints;
@@ -23,9 +20,8 @@ namespace Job.Api.Endpoints;
 /// POST   /api/admin/jobs/{id}/reject      — reject a Pending job with reason
 /// All endpoints require X-User-Role: Admin.
 /// Uses IgnoreQueryFilters() so Admin can see Pending and Rejected jobs.
-/// Approve/Reject write OutboxEvent atomically in the same SaveChangesAsync call.
-/// Create/update/delete publish through <see cref="KafkaJobEventPublisher"/> like the
-/// recruiter endpoints (Kafka primary, HTTP fallback), so search-svc follows the change.
+/// Every write that changes a job (create, update, approve, reject, soft and hard delete) adds its
+/// job event to the outbox in the same SaveChangesAsync call, so search-svc follows the change.
 /// </summary>
 public static class AdminJobEndpoints
 {
@@ -152,7 +148,6 @@ public static class AdminJobEndpoints
         JobCreateDto dto,
         JobDbContext db,
         HttpContext ctx,
-        KafkaJobEventPublisher kafkaPublisher,
         ILoggerFactory loggerFactory,
         CancellationToken ct = default)
     {
@@ -187,17 +182,8 @@ public static class AdminJobEndpoints
         }
 
         db.Jobs.Add(job);
+        db.OutboxEvents.Add(JobOutboxEvents.Created(job, company!.Name, category?.Name));
         await db.SaveChangesAsync(ct);
-
-        var createdEvent = new JobCreatedEvent(
-            job.Id, job.Title, job.Description, job.CompanyId, company!.Name,
-            job.Location, job.SalaryMin, job.SalaryMax, job.SalaryCurrency,
-            job.CategoryId, category?.Name, job.EmploymentType, job.ExperienceLevel,
-            job.RecruiterId, job.Requirements, job.Benefits,
-            job.Status.ToString(), DateTime.UtcNow, job.CreatedAt);
-        // Detached from request cancellation: the job is already persisted.
-        await kafkaPublisher.PublishJobCreatedAsync(
-            createdEvent, company.Name, category?.Name, job.Status.ToString(), CancellationToken.None);
 
         loggerFactory.CreateLogger("AdminJobEndpoints").LogInformation(
             "Admin {AdminId} created job {JobId}.", adminId.Value, job.Id);
@@ -211,7 +197,6 @@ public static class AdminJobEndpoints
         JobUpdateDto dto,
         JobDbContext db,
         HttpContext ctx,
-        KafkaJobEventPublisher kafkaPublisher,
         ILoggerFactory loggerFactory,
         CancellationToken ct = default)
     {
@@ -241,18 +226,10 @@ public static class AdminJobEndpoints
             return Results.ValidationProblem(new Dictionary<string, string[]> { ["request"] = [ex.Message] });
         }
 
-        await db.SaveChangesAsync(ct);
-
-        // Update() never changes the status: publish the actual one so a Pending or
+        // Update() never changes the status: the event carries the actual one so a Pending or
         // Closed job edited here stays out of the public index.
-        var updatedEvent = new JobUpdatedEvent(
-            job.Id, job.Title, job.Description, job.CompanyId, company!.Name,
-            job.Location, job.SalaryMin, job.SalaryMax, job.SalaryCurrency,
-            job.CategoryId, category?.Name, job.EmploymentType, job.ExperienceLevel,
-            job.RecruiterId, job.Requirements, job.Benefits,
-            job.Status.ToString(), DateTime.UtcNow, job.CreatedAt);
-        await kafkaPublisher.PublishJobUpdatedAsync(
-            updatedEvent, company.Name, category?.Name, job.Status.ToString(), CancellationToken.None);
+        db.OutboxEvents.Add(JobOutboxEvents.Updated(job, company!.Name, category?.Name));
+        await db.SaveChangesAsync(ct);
 
         loggerFactory.CreateLogger("AdminJobEndpoints").LogInformation(
             "Admin {AdminId} updated job {JobId}.", adminId.Value, job.Id);
@@ -265,7 +242,6 @@ public static class AdminJobEndpoints
         Guid id,
         JobDbContext db,
         HttpContext ctx,
-        KafkaJobEventPublisher kafkaPublisher,
         ILoggerFactory loggerFactory,
         CancellationToken ct = default)
     {
@@ -277,15 +253,12 @@ public static class AdminJobEndpoints
         if (job is null)
             return Results.NotFound(new { message = "Job not found." });
 
+        // Queued even when the job was already deleted: idempotent on search-svc,
+        // and it removes a document left in the index by an earlier event.
         if (job.Status != JobStatus.Deleted)
-        {
             job.SoftDelete();
-            await db.SaveChangesAsync(ct);
-        }
-
-        // Published even when the job was already deleted: idempotent on search-svc,
-        // and it removes a document left in the index by an earlier lost event.
-        await kafkaPublisher.PublishJobDeletedAsync(job.Id, CancellationToken.None);
+        db.OutboxEvents.Add(JobOutboxEvents.Deleted(job.Id));
+        await db.SaveChangesAsync(ct);
 
         loggerFactory.CreateLogger("AdminJobEndpoints").LogInformation(
             "Admin {AdminId} soft-deleted job {JobId}.", adminId.Value, job.Id);
@@ -298,7 +271,6 @@ public static class AdminJobEndpoints
         Guid id,
         JobDbContext db,
         HttpContext ctx,
-        KafkaJobEventPublisher kafkaPublisher,
         ILoggerFactory loggerFactory,
         CancellationToken ct = default)
     {
@@ -314,11 +286,10 @@ public static class AdminJobEndpoints
                 new { message = "Only a soft-deleted job can be permanently deleted. Delete it first." },
                 statusCode: 409);
 
-        // SavedJobs rows go with it (FK ON DELETE CASCADE). Queued outbox rows for this
-        // job are left alone: the publisher sends job.deleted for a job that no longer exists.
+        // SavedJobs rows go with it (FK ON DELETE CASCADE). The job.deleted row commits with the removal.
         db.Jobs.Remove(job);
+        db.OutboxEvents.Add(JobOutboxEvents.Deleted(id));
         await db.SaveChangesAsync(ct);
-        await kafkaPublisher.PublishJobDeletedAsync(id, CancellationToken.None);
 
         loggerFactory.CreateLogger("AdminJobEndpoints").LogWarning(
             "Admin {AdminId} permanently deleted job {JobId} ({Title}).", adminId.Value, id, job.Title);
@@ -381,7 +352,7 @@ public static class AdminJobEndpoints
             return Results.Json(new { message = approveResult.Error }, statusCode: 400);
 
         // ATOMIC: job update + outbox event in one SaveChanges (single DB transaction)
-        db.OutboxEvents.Add(BuildUpdatedOutboxEvent(job));
+        db.OutboxEvents.Add(JobOutboxEvents.Updated(job, job.Company?.Name ?? "", job.Category?.Name));
 
         await db.SaveChangesAsync(ct);
 
@@ -425,7 +396,7 @@ public static class AdminJobEndpoints
             return Results.Json(new { message = rejectResult.Error }, statusCode: 400);
 
         // ATOMIC: job update + outbox event in one SaveChanges (single DB transaction)
-        db.OutboxEvents.Add(BuildUpdatedOutboxEvent(job));
+        db.OutboxEvents.Add(JobOutboxEvents.Updated(job, job.Company?.Name ?? "", job.Category?.Name));
 
         await db.SaveChangesAsync(ct);
 
@@ -433,28 +404,6 @@ public static class AdminJobEndpoints
             "Admin {AdminId} rejected job {JobId}.",
             adminId.Value, job.Id);
         return Results.Ok(new { message = "Job rejected.", jobId = job.Id });
-    }
-
-    /// <summary>
-    /// Builds the <c>job.updated</c> outbox record for a job whose status just changed.
-    /// The payload is serialized with <see cref="KafkaJson.Options"/> so the stored
-    /// bytes match what <c>KafkaProducerService</c> writes on the wire.
-    /// </summary>
-    private static OutboxEvent BuildUpdatedOutboxEvent(JobPosting job)
-    {
-        var updatedEvent = new JobUpdatedEvent(
-            job.Id, job.Title, job.Description, job.CompanyId, job.Company?.Name ?? "",
-            job.Location, job.SalaryMin, job.SalaryMax, job.SalaryCurrency,
-            job.CategoryId, job.Category?.Name, job.EmploymentType, job.ExperienceLevel,
-            job.RecruiterId, job.Requirements, job.Benefits,
-            job.Status.ToString(), DateTime.UtcNow, job.CreatedAt);
-
-        return new OutboxEvent(
-            eventType: JobEventTypes.Updated,
-            payload: JsonSerializer.Serialize(
-                EventEnvelope<JobUpdatedEvent>.Create(JobEventTypes.Updated, updatedEvent),
-                KafkaJson.Options),
-            aggregateId: job.Id.ToString());
     }
 }
 

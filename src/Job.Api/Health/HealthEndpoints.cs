@@ -10,8 +10,7 @@ public static class HealthEndpoints
     public static IServiceCollection AddJobHealthChecks(this IServiceCollection services)
     {
         services.AddHealthChecks()
-            .AddCheck<DatabaseHealthCheck>("postgres", tags: ["ready"], timeout: TimeSpan.FromSeconds(4))
-            .AddCheck<KafkaStateHealthCheck>("kafka", tags: ["ready"], timeout: TimeSpan.FromSeconds(2));
+            .AddCheck<DatabaseHealthCheck>("postgres", tags: ["ready"], timeout: TimeSpan.FromSeconds(4));
         return services;
     }
 

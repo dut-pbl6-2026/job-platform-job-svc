@@ -1,8 +1,8 @@
 using Job.Api.Auth;
 using Job.Api.DTOs;
-using Job.Api.Services;
 using Job.Core.Entities;
 using Job.Infrastructure.Data;
+using Job.Infrastructure.Outbox;
 using Microsoft.EntityFrameworkCore;
 using SharedKernel.Events;
 using JobPosting = Job.Core.Entities.Job;
@@ -43,8 +43,6 @@ public static class JobEndpoints
         JobCreateDto dto,
         JobDbContext db,
         HttpContext ctx,
-        SearchSyncPublisher sync,
-        KafkaJobEventPublisher kafkaPublisher,
         IConfiguration configuration,
         CancellationToken ct)
     {
@@ -108,21 +106,10 @@ public static class JobEndpoints
             { ["request"] = [ex.Message] });
         }
 
+        // Job row and job.created outbox row commit in one transaction; OutboxPublisherService publishes it.
         db.Jobs.Add(job);
+        db.OutboxEvents.Add(JobOutboxEvents.Created(job, company.Name, category?.Name));
         await db.SaveChangesAsync(ct);
-        // PBL6-5: publish job.created event (Kafka primary, HTTP fallback).
-        // Detached from request cancellation: post-commit work must not throw
-        // OperationCanceledException (=> 500) for an already-persisted job when
-        // the client disconnects. The publisher swallows all exceptions.
-        var createdEvent = new JobCreatedEvent(
-            job.Id, job.Title, job.Description, job.CompanyId, company.Name,
-            job.Location, job.SalaryMin, job.SalaryMax, job.SalaryCurrency,
-            job.CategoryId, category?.Name, job.EmploymentType, job.ExperienceLevel,
-            job.RecruiterId, job.Requirements, job.Benefits,
-            job.Status.ToString(), DateTime.UtcNow, job.CreatedAt);
-        await kafkaPublisher.PublishJobCreatedAsync(
-            createdEvent, company.Name, category?.Name,
-            job.Status.ToString(), CancellationToken.None);
         return Results.Created($"/api/jobs/{job.Id}", new { id = job.Id, message = "Job created" });
     }
 
@@ -184,7 +171,7 @@ public static class JobEndpoints
 
     private static async Task<IResult> UpdateJob(
         Guid id, JobUpdateDto dto, JobDbContext db, HttpContext ctx,
-        SearchSyncPublisher sync, KafkaJobEventPublisher kafkaPublisher, CancellationToken ct)
+        CancellationToken ct)
     {
         var (recruiterId, role) = IdentityHelper.GetIdentity(ctx);
         if (recruiterId is null)
@@ -230,25 +217,16 @@ public static class JobEndpoints
             { ["request"] = [ex.Message] });
         }
 
+        // The event carries the ACTUAL status: Update() never changes it, so a Closed job
+        // updated here stays Closed in the index (search filters Active).
+        db.OutboxEvents.Add(JobOutboxEvents.Updated(job, updateCompany.Name, updateCategory?.Name));
         await db.SaveChangesAsync(ct);
-        // PBL6-5: publish job.updated event (Kafka primary, HTTP fallback).
-        // Pass the ACTUAL status: Update() never changes it, so a Closed job
-        // updated here must stay Closed in the index (search filters Active).
-        var updatedEvent = new JobUpdatedEvent(
-            job.Id, job.Title, job.Description, job.CompanyId, updateCompany.Name,
-            job.Location, job.SalaryMin, job.SalaryMax, job.SalaryCurrency,
-            job.CategoryId, updateCategory?.Name, job.EmploymentType, job.ExperienceLevel,
-            job.RecruiterId, job.Requirements, job.Benefits,
-            job.Status.ToString(), DateTime.UtcNow, job.CreatedAt);
-        await kafkaPublisher.PublishJobUpdatedAsync(
-            updatedEvent, updateCompany.Name, updateCategory?.Name,
-            job.Status.ToString(), CancellationToken.None);
         return Results.Ok(new { message = "Job updated" });
     }
 
     private static async Task<IResult> DeleteJob(
         Guid id, JobDbContext db, HttpContext ctx,
-        SearchSyncPublisher sync, KafkaJobEventPublisher kafkaPublisher, CancellationToken ct)
+        CancellationToken ct)
     {
         var (recruiterId, role) = IdentityHelper.GetIdentity(ctx);
         if (recruiterId is null)
@@ -262,10 +240,8 @@ public static class JobEndpoints
             return ForbiddenResult("Forbidden. You do not own this job.");
 
         job.SoftDelete();
+        db.OutboxEvents.Add(JobOutboxEvents.Deleted(id));
         await db.SaveChangesAsync(ct);
-        // PBL6-5: publish job.deleted event (Kafka primary, HTTP fallback).
-        // Detached from request cancellation (see CreateJob).
-        await kafkaPublisher.PublishJobDeletedAsync(id, CancellationToken.None);
         return Results.NoContent();
     }
 }

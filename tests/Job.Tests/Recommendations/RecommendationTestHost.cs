@@ -61,9 +61,7 @@ internal sealed class RecommendationTestHost : IAsyncDisposable
         var dbName = "Recommendations_" + Guid.NewGuid();
         builder.Services.AddDbContext<JobDbContext>(o => o.UseInMemoryDatabase(dbName));
         builder.Services.AddProblemDetails();
-        builder.Services.AddHttpClient<SearchSyncPublisher>();
         builder.Services.AddSingleton<IKafkaProducer, NoOpKafkaProducer>();
-        builder.Services.AddSingleton<KafkaJobEventPublisher>();
         builder.Services.AddRecommendations();
 
         var app = builder.Build();

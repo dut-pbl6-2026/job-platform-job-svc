@@ -2,15 +2,12 @@ using System.Reflection;
 using System.Security.Claims;
 using Job.Api.DTOs;
 using Job.Api.Endpoints;
-using Job.Api.Services;
 using Job.Core.Entities;
 using Job.Infrastructure.Data;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging.Abstractions;
 using SharedKernel.Events;
-using SharedKernel.Kafka;
 
 namespace Job.Tests;
 
@@ -48,23 +45,22 @@ public sealed class JobCreateFeatureFlagTests : IDisposable
         string? flagValue, JobStatus expectedStatus)
     {
         var configuration = BuildConfiguration(flagValue);
-        using var http = new HttpClient();
-        var searchSync = new SearchSyncPublisher(
-            http, configuration, NullLogger<SearchSyncPublisher>.Instance);
-        using var kafka = new KafkaJobEventPublisher(
-            new RecordingProducer(), searchSync,
-            NullLogger<KafkaJobEventPublisher>.Instance, configuration);
 
         var dto = new JobCreateDto(
             "Backend Developer", "Build APIs", _companyId, "Da Nang",
             null, null, null, null, null, null, null, null);
 
-        var result = await InvokeCreateJob(dto, searchSync, kafka, configuration);
+        var result = await InvokeCreateJob(dto, configuration);
 
         var status = Assert.IsAssignableFrom<IStatusCodeHttpResult>(result);
         Assert.Equal(201, status.StatusCode);
         var job = await _db.Jobs.IgnoreQueryFilters().SingleAsync();
         Assert.Equal(expectedStatus, job.Status);
+
+        // The job.created event is queued with the job's initial status.
+        var outbox = await _db.OutboxEvents.SingleAsync();
+        Assert.Equal(JobEventTypes.Created, outbox.EventType);
+        Assert.Contains($"\"status\":\"{expectedStatus}\"", outbox.Payload);
     }
 
     private static IConfiguration BuildConfiguration(string? flagValue)
@@ -88,27 +84,12 @@ public sealed class JobCreateFeatureFlagTests : IDisposable
             ], "Test"))
         };
 
-    private async Task<IResult> InvokeCreateJob(
-        JobCreateDto dto,
-        SearchSyncPublisher searchSync,
-        KafkaJobEventPublisher kafka,
-        IConfiguration configuration)
+    private async Task<IResult> InvokeCreateJob(JobCreateDto dto, IConfiguration configuration)
     {
         var method = typeof(JobEndpoints).GetMethod(
             "CreateJob", BindingFlags.NonPublic | BindingFlags.Static)!;
         return await (Task<IResult>)method.Invoke(
             null,
-            [dto, _db, BuildContext(), searchSync, kafka, configuration, CancellationToken.None])!;
-    }
-
-    private sealed class RecordingProducer : IKafkaProducer
-    {
-        public Task ProduceAsync<T>(
-            string topic, string key, EventEnvelope<T> envelope,
-            CancellationToken ct = default) => Task.CompletedTask;
-
-        public void Dispose()
-        {
-        }
+            [dto, _db, BuildContext(), configuration, CancellationToken.None])!;
     }
 }

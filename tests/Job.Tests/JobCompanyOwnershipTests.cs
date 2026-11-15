@@ -2,15 +2,11 @@ using System.Reflection;
 using System.Security.Claims;
 using Job.Api.DTOs;
 using Job.Api.Endpoints;
-using Job.Api.Services;
 using Job.Core.Entities;
 using Job.Infrastructure.Data;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging.Abstractions;
-using SharedKernel.Events;
-using SharedKernel.Kafka;
 using JobPosting = Job.Core.Entities.Job;
 
 namespace Job.Tests;
@@ -24,9 +20,6 @@ public sealed class JobCompanyOwnershipTests : IDisposable
     private readonly Guid _ownCompanyId = Guid.NewGuid();
     private readonly Guid _otherCompanyId = Guid.NewGuid();
     private readonly Guid _secondOwnCompanyId = Guid.NewGuid();
-    private readonly HttpClient _http = new();
-    private readonly KafkaJobEventPublisher _kafka;
-    private readonly SearchSyncPublisher _searchSync;
     private readonly IConfiguration _configuration = new ConfigurationBuilder().Build();
 
     public JobCompanyOwnershipTests()
@@ -40,16 +33,10 @@ public sealed class JobCompanyOwnershipTests : IDisposable
         AddCompany(_secondOwnCompanyId, "Second Own Corp", _recruiterId);
         AddCompany(_otherCompanyId, "Other Corp", _otherRecruiterId);
         _db.SaveChanges();
-
-        _searchSync = new SearchSyncPublisher(_http, _configuration, NullLogger<SearchSyncPublisher>.Instance);
-        _kafka = new KafkaJobEventPublisher(
-            new RecordingProducer(), _searchSync, NullLogger<KafkaJobEventPublisher>.Instance, _configuration);
     }
 
     public void Dispose()
     {
-        _kafka.Dispose();
-        _http.Dispose();
         _db.Dispose();
     }
 
@@ -58,7 +45,7 @@ public sealed class JobCompanyOwnershipTests : IDisposable
     {
         var dto = CreateDto(_otherCompanyId);
 
-        var result = await Invoke("CreateJob", dto, _db, Ctx(_recruiterId), _searchSync, _kafka, _configuration, CancellationToken.None);
+        var result = await Invoke("CreateJob", dto, _db, Ctx(_recruiterId), _configuration, CancellationToken.None);
 
         Assert.Equal(403, Status(result));
         Assert.Empty(await _db.Jobs.IgnoreQueryFilters().ToListAsync());
@@ -69,7 +56,7 @@ public sealed class JobCompanyOwnershipTests : IDisposable
     {
         var dto = CreateDto(_ownCompanyId);
 
-        var result = await Invoke("CreateJob", dto, _db, Ctx(_recruiterId), _searchSync, _kafka, _configuration, CancellationToken.None);
+        var result = await Invoke("CreateJob", dto, _db, Ctx(_recruiterId), _configuration, CancellationToken.None);
 
         Assert.Equal(201, Status(result));
         var job = await _db.Jobs.IgnoreQueryFilters().SingleAsync();
@@ -82,7 +69,7 @@ public sealed class JobCompanyOwnershipTests : IDisposable
     {
         var job = await SeedJob(_ownCompanyId);
 
-        var result = await Invoke("UpdateJob", job.Id, UpdateDto(_otherCompanyId), _db, Ctx(_recruiterId), _searchSync, _kafka, CancellationToken.None);
+        var result = await Invoke("UpdateJob", job.Id, UpdateDto(_otherCompanyId), _db, Ctx(_recruiterId), CancellationToken.None);
 
         Assert.Equal(403, Status(result));
         var reloaded = await _db.Jobs.IgnoreQueryFilters().SingleAsync();
@@ -94,7 +81,7 @@ public sealed class JobCompanyOwnershipTests : IDisposable
     {
         var job = await SeedJob(_ownCompanyId);
 
-        var result = await Invoke("UpdateJob", job.Id, UpdateDto(_secondOwnCompanyId), _db, Ctx(_recruiterId), _searchSync, _kafka, CancellationToken.None);
+        var result = await Invoke("UpdateJob", job.Id, UpdateDto(_secondOwnCompanyId), _db, Ctx(_recruiterId), CancellationToken.None);
 
         Assert.Equal(200, Status(result));
         var reloaded = await _db.Jobs.IgnoreQueryFilters().SingleAsync();
@@ -141,16 +128,5 @@ public sealed class JobCompanyOwnershipTests : IDisposable
     {
         var method = typeof(JobEndpoints).GetMethod(name, BindingFlags.NonPublic | BindingFlags.Static)!;
         return await (Task<IResult>)method.Invoke(null, args)!;
-    }
-
-    private sealed class RecordingProducer : IKafkaProducer
-    {
-        public Task ProduceAsync<T>(
-            string topic, string key, EventEnvelope<T> envelope, CancellationToken ct = default) =>
-            Task.CompletedTask;
-
-        public void Dispose()
-        {
-        }
     }
 }

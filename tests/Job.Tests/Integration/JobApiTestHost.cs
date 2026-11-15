@@ -5,6 +5,7 @@ using Job.Api.Middleware;
 using Job.Api.Services;
 using Job.Core.Entities;
 using Job.Infrastructure.Data;
+using Job.Infrastructure.Workers;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
@@ -50,9 +51,7 @@ internal sealed class JobApiTestHost : IAsyncDisposable
         var dbName = "JobApi_" + Guid.NewGuid();
         builder.Services.AddDbContext<JobDbContext>(o => o.UseInMemoryDatabase(dbName));
         builder.Services.AddProblemDetails();
-        builder.Services.AddHttpClient<SearchSyncPublisher>();
         builder.Services.AddSingleton<IKafkaProducer, NoOpKafkaProducer>();
-        builder.Services.AddSingleton<KafkaJobEventPublisher>();
 
         var app = builder.Build();
         app.UseExceptionHandler();
@@ -88,6 +87,24 @@ internal sealed class JobApiTestHost : IAsyncDisposable
         using var scope = _app.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<JobDbContext>();
         return await db.Jobs.IgnoreQueryFilters().AsNoTracking().SingleOrDefaultAsync(j => j.Id == jobId);
+    }
+
+    public async Task<List<OutboxEvent>> LoadOutboxAsync()
+    {
+        using var scope = _app.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<JobDbContext>();
+        return await db.OutboxEvents.AsNoTracking().OrderBy(e => e.CreatedAt).ToListAsync();
+    }
+
+    /// <summary>Runs one outbox publish cycle with the given producer and clock.</summary>
+    public async Task<bool> RunOutboxCycleAsync(IKafkaProducer producer, TimeProvider clock)
+    {
+        var publisher = new OutboxPublisherService(
+            _app.Services.GetRequiredService<IServiceScopeFactory>(),
+            producer,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<OutboxPublisherService>.Instance,
+            clock);
+        return await publisher.PublishPendingAsync(CancellationToken.None);
     }
 
     public Task<HttpResponseMessage> SendAsync(HttpMethod method, string url, Guid? userId, string? role, object? body = null)

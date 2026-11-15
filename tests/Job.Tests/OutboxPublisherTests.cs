@@ -1,10 +1,11 @@
-using System.Reflection;
+using System.Text.Json;
 using Job.Core.Entities;
 using Job.Infrastructure.Data;
+using Job.Infrastructure.Outbox;
 using Job.Infrastructure.Workers;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging;
 using SharedKernel.Events;
 using SharedKernel.Kafka;
 
@@ -12,6 +13,8 @@ namespace Job.Tests;
 
 public sealed class OutboxPublisherTests
 {
+    private static readonly DateTime Start = new(2026, 11, 15, 10, 0, 0, DateTimeKind.Utc);
+
     [Fact]
     public async Task ProcessBatch_PublishesEventAndMarksItPublished()
     {
@@ -24,9 +27,9 @@ public sealed class OutboxPublisherTests
             await seedDb.SaveChangesAsync();
         }
 
-        using var service = CreateService(provider, producer);
+        using var service = CreateService(provider, new FixedTimeProvider(Start));
 
-        await InvokeProcessBatch(service);
+        Assert.True(await service.PublishPendingAsync(CancellationToken.None));
 
         await using var verifyDb = CreateDb(databaseName);
         var saved = await verifyDb.OutboxEvents.SingleAsync();
@@ -37,7 +40,7 @@ public sealed class OutboxPublisherTests
     }
 
     [Fact]
-    public async Task ProcessBatch_WhenKafkaFails_IncrementsRetryCount()
+    public async Task ProcessBatch_WhenKafkaFails_KeepsRowAndSchedulesRetry()
     {
         var producer = new RecordingKafkaProducer { ShouldFail = true };
         await using var provider = BuildProvider(producer, out var databaseName);
@@ -47,18 +50,20 @@ public sealed class OutboxPublisherTests
             await seedDb.SaveChangesAsync();
         }
 
-        using var service = CreateService(provider, producer);
+        var clock = new FixedTimeProvider(Start);
+        using var service = CreateService(provider, clock);
 
-        await InvokeProcessBatch(service);
+        Assert.False(await service.PublishPendingAsync(CancellationToken.None));
 
         await using var verifyDb = CreateDb(databaseName);
         var saved = await verifyDb.OutboxEvents.SingleAsync();
         Assert.False(saved.IsPublished);
         Assert.Equal(1, saved.RetryCount);
+        Assert.Equal(Start + OutboxRetryPolicy.BaseDelay, saved.NextAttemptAt);
     }
 
     [Fact]
-    public async Task ProcessBatch_AfterMaxRetries_StopsRetryingEvent()
+    public async Task ProcessBatch_RowIsNotRetriedBeforeItsBackoffElapses()
     {
         var producer = new RecordingKafkaProducer { ShouldFail = true };
         await using var provider = BuildProvider(producer, out var databaseName);
@@ -68,23 +73,51 @@ public sealed class OutboxPublisherTests
             await seedDb.SaveChangesAsync();
         }
 
-        using var service = CreateService(provider, producer);
+        var clock = new FixedTimeProvider(Start);
+        using var service = CreateService(provider, clock);
 
-        for (var attempt = 0; attempt < 5; attempt++)
+        await service.PublishPendingAsync(CancellationToken.None);
+        clock.Now = Start + OutboxRetryPolicy.BaseDelay - TimeSpan.FromSeconds(1);
+        await service.PublishPendingAsync(CancellationToken.None);
+
+        Assert.Equal(1, producer.Attempts);
+    }
+
+    [Fact]
+    public async Task ProcessBatch_WhenKafkaKeepsFailing_NeverDropsTheRow_AndLogsAtError()
+    {
+        var producer = new RecordingKafkaProducer { ShouldFail = true };
+        await using var provider = BuildProvider(producer, out var databaseName);
+        Guid outboxId;
+        await using (var seedDb = CreateDb(databaseName))
         {
-            await InvokeProcessBatch(service);
+            var row = CreateEvent();
+            outboxId = row.Id;
+            seedDb.OutboxEvents.Add(row);
+            await seedDb.SaveChangesAsync();
         }
 
-        Assert.Equal(5, producer.Attempts);
+        var clock = new FixedTimeProvider(Start);
+        var logger = new CapturingLogger();
+        using var service = CreateService(provider, clock, logger);
 
-        // RetryCount == MaxRetries: the event is excluded from the next batch.
-        await InvokeProcessBatch(service);
+        // Well past the old give-up point of 5 attempts: each attempt happens once its backoff has elapsed.
+        const int attempts = 12;
+        for (var attempt = 0; attempt < attempts; attempt++)
+        {
+            await service.PublishPendingAsync(CancellationToken.None);
+            clock.Now = clock.Now.AddMinutes(10);
+        }
 
-        Assert.Equal(5, producer.Attempts);
+        Assert.Equal(attempts, producer.Attempts);
         await using var verifyDb = CreateDb(databaseName);
         var saved = await verifyDb.OutboxEvents.SingleAsync();
-        Assert.Equal(5, saved.RetryCount);
         Assert.False(saved.IsPublished);
+        Assert.Equal(attempts, saved.RetryCount);
+
+        var errors = logger.Entries.Where(e => e.Level == LogLevel.Error).ToList();
+        Assert.Equal(attempts - OutboxRetryPolicy.ErrorLogThreshold + 1, errors.Count);
+        Assert.All(errors, e => Assert.Contains(outboxId.ToString(), e.Message));
     }
 
     [Fact]
@@ -102,9 +135,9 @@ public sealed class OutboxPublisherTests
             await seedDb.SaveChangesAsync();
         }
 
-        using var service = CreateService(provider, producer);
+        using var service = CreateService(provider, new FixedTimeProvider(Start));
 
-        await InvokeProcessBatch(service);
+        await service.PublishPendingAsync(CancellationToken.None);
 
         Assert.Equal(10, producer.Attempts);
         await using var verifyDb = CreateDb(databaseName);
@@ -128,9 +161,9 @@ public sealed class OutboxPublisherTests
             await seedDb.SaveChangesAsync();
         }
 
-        using var service = CreateService(provider, producer);
+        using var service = CreateService(provider, new FixedTimeProvider(DateTime.UtcNow));
 
-        await InvokeProcessBatch(service);
+        await service.PublishPendingAsync(CancellationToken.None);
 
         await using var verifyDb = CreateDb(databaseName);
         var remaining = await verifyDb.OutboxEvents.ToListAsync();
@@ -155,9 +188,9 @@ public sealed class OutboxPublisherTests
             await seedDb.SaveChangesAsync();
         }
 
-        using var service = CreateService(provider, producer);
+        using var service = CreateService(provider, new FixedTimeProvider(Start));
 
-        await InvokeProcessBatch(service);
+        await service.PublishPendingAsync(CancellationToken.None);
 
         Assert.Equal(JobEventTypes.Deleted, producer.EventType);
         var payload = Assert.IsType<JobDeletedEvent>(producer.Payload);
@@ -179,9 +212,9 @@ public sealed class OutboxPublisherTests
             await seedDb.SaveChangesAsync();
         }
 
-        using var service = CreateService(provider, producer);
+        using var service = CreateService(provider, new FixedTimeProvider(Start));
 
-        await InvokeProcessBatch(service);
+        await service.PublishPendingAsync(CancellationToken.None);
 
         Assert.Equal(JobEventTypes.Deleted, producer.EventType);
         Assert.Equal(jobId, Assert.IsType<JobDeletedEvent>(producer.Payload).JobId);
@@ -199,9 +232,9 @@ public sealed class OutboxPublisherTests
             await seedDb.SaveChangesAsync();
         }
 
-        using var service = CreateService(provider, producer);
+        using var service = CreateService(provider, new FixedTimeProvider(Start));
 
-        await InvokeProcessBatch(service);
+        await service.PublishPendingAsync(CancellationToken.None);
 
         Assert.Equal(JobEventTypes.Updated, producer.EventType);
         var payload = Assert.IsType<JobUpdatedEvent>(producer.Payload);
@@ -209,12 +242,62 @@ public sealed class OutboxPublisherTests
         Assert.Equal("Active", payload.Status);
     }
 
+    [Fact]
+    public async Task ProcessBatch_CreatedRow_PublishesJobCreatedWithCurrentState()
+    {
+        var producer = new RecordingKafkaProducer();
+        await using var provider = BuildProvider(producer, out var databaseName);
+        Guid jobId;
+        await using (var seedDb = CreateDb(databaseName))
+        {
+            var job = SeedJob(seedDb, title: "Created job");
+            jobId = job.Id;
+            seedDb.OutboxEvents.Add(JobOutboxEvents.Created(job, "Outbox Corp", null));
+            await seedDb.SaveChangesAsync();
+        }
+
+        using var service = CreateService(provider, new FixedTimeProvider(Start));
+
+        await service.PublishPendingAsync(CancellationToken.None);
+
+        Assert.Equal(JobEventTypes.Created, producer.EventType);
+        var payload = Assert.IsType<JobCreatedEvent>(producer.Payload);
+        Assert.Equal(jobId, payload.JobId);
+        Assert.Equal("Created job", payload.Title);
+        Assert.Equal(jobId.ToString(), producer.Key);
+    }
+
+    [Fact]
+    public async Task ProcessBatch_DeletedRow_PublishesStoredEnvelopeUnchanged()
+    {
+        var producer = new RecordingKafkaProducer();
+        await using var provider = BuildProvider(producer, out var databaseName);
+        var jobId = Guid.NewGuid();
+        Guid storedEventId;
+        await using (var seedDb = CreateDb(databaseName))
+        {
+            var row = JobOutboxEvents.Deleted(jobId);
+            seedDb.OutboxEvents.Add(row);
+            await seedDb.SaveChangesAsync();
+            storedEventId = JsonDocument.Parse(row.Payload).RootElement.GetProperty("eventId").GetGuid();
+        }
+
+        using var service = CreateService(provider, new FixedTimeProvider(Start));
+
+        await service.PublishPendingAsync(CancellationToken.None);
+
+        Assert.Equal(JobEventTypes.Deleted, producer.EventType);
+        Assert.Equal(storedEventId, producer.EventId);
+        Assert.Equal(jobId, Assert.IsType<JobDeletedEvent>(producer.Payload).JobId);
+    }
+
     private static OutboxPublisherService CreateService(
-        ServiceProvider provider, IKafkaProducer producer) =>
+        ServiceProvider provider, TimeProvider clock, ILogger<OutboxPublisherService>? logger = null) =>
         new(
             provider.GetRequiredService<IServiceScopeFactory>(),
-            producer,
-            NullLogger<OutboxPublisherService>.Instance);
+            provider.GetRequiredService<IKafkaProducer>(),
+            logger ?? new CapturingLogger(),
+            clock);
 
     private static Core.Entities.Job SeedJob(JobDbContext db, string title = "Developer")
     {
@@ -233,7 +316,7 @@ public sealed class OutboxPublisherTests
             Guid.NewGuid(), null, null, status, DateTime.UtcNow);
         return new OutboxEvent(
             "job.updated",
-            System.Text.Json.JsonSerializer.Serialize(
+            JsonSerializer.Serialize(
                 EventEnvelope<JobUpdatedEvent>.Create("job.updated", payload),
                 KafkaJson.Options),
             payload.JobId.ToString());
@@ -267,11 +350,24 @@ public sealed class OutboxPublisherTests
         return new JobDbContext(options);
     }
 
-    private static async Task InvokeProcessBatch(OutboxPublisherService service)
+    private sealed class FixedTimeProvider(DateTime now) : TimeProvider
     {
-        var method = typeof(OutboxPublisherService).GetMethod(
-            "ProcessBatchAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
-        await (Task)method.Invoke(service, [CancellationToken.None])!;
+        public DateTime Now { get; set; } = now;
+
+        public override DateTimeOffset GetUtcNow() => new(DateTime.SpecifyKind(Now, DateTimeKind.Utc));
+    }
+
+    private sealed class CapturingLogger : ILogger<OutboxPublisherService>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Entries.Add((logLevel, formatter(state, exception)));
     }
 
     private sealed class RecordingKafkaProducer : IKafkaProducer
@@ -281,6 +377,7 @@ public sealed class OutboxPublisherTests
         public string? Topic { get; private set; }
         public string? EventType { get; private set; }
         public string? Key { get; private set; }
+        public Guid EventId { get; private set; }
         public object? Payload { get; private set; }
 
         public Task ProduceAsync<T>(
@@ -294,6 +391,7 @@ public sealed class OutboxPublisherTests
             Topic = topic;
             Key = key;
             EventType = envelope.EventType;
+            EventId = envelope.EventId;
             Payload = envelope.Payload;
             return Task.CompletedTask;
         }
