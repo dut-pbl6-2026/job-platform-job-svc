@@ -13,7 +13,9 @@ namespace Job.Tests;
 
 public sealed class OutboxPublisherTests
 {
-    private static readonly DateTime Start = new(2026, 11, 15, 10, 0, 0, DateTimeKind.Utc);
+    // Rows are stamped with DateTime.UtcNow when they are created (OutboxEvent), so the test clock must
+    // start after that. A fixed date made every row look not-yet-due once the wall clock passed it.
+    private static readonly DateTime Start = DateTime.UtcNow.AddDays(1);
 
     [Fact]
     public async Task ProcessBatch_PublishesEventAndMarksItPublished()

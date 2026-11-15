@@ -6,7 +6,9 @@ namespace Job.Tests;
 /// <summary>Pure decisions of the outbox publisher: backoff after a failure and which rows a cycle may claim.</summary>
 public sealed class OutboxPoliciesTests
 {
-    private static readonly DateTime Now = new(2026, 11, 15, 10, 0, 0, DateTimeKind.Utc);
+    // Rows are stamped with DateTime.UtcNow when they are created (OutboxEvent), so "now" must be after
+    // that. A fixed date made every row look not-yet-due once the wall clock passed it.
+    private static readonly DateTime Now = DateTime.UtcNow.AddDays(1);
 
     [Theory]
     [InlineData(0, 5)]
