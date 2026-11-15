@@ -72,6 +72,8 @@ public static class JobEndpoints
         if (company is null)
             return Results.ValidationProblem(new Dictionary<string, string[]>
             { ["companyId"] = ["Company not found."] });
+        if (company.CreatedBy != recruiterId.Value)
+            return ForbiddenResult("Forbidden. You do not own this company.");
 
         Category? category = null;
         if (dto.CategoryId.HasValue)
@@ -203,6 +205,8 @@ public static class JobEndpoints
         if (updateCompany is null)
             return Results.ValidationProblem(new Dictionary<string, string[]>
             { ["companyId"] = ["Company not found."] });
+        if (updateCompany.CreatedBy != recruiterId.Value)
+            return ForbiddenResult("Forbidden. You do not own this company.");
 
         Category? updateCategory = null;
         if (dto.CategoryId.HasValue)
