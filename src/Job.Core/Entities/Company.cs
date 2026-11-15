@@ -13,6 +13,7 @@ public class Company : Entity
     public const int AddressMaxLength = 512;
     public const int IndustryMaxLength = 128;
     public const int SizeMaxLength = 64;
+    public const int EmailDomainMaxLength = 253;
 
     public string Name { get; private set; } = "";
     public string? TaxCode { get; private set; }
@@ -23,6 +24,12 @@ public class Company : Entity
     public string? Address { get; private set; }
     public string? Industry { get; private set; }
     public string? Size { get; private set; }
+
+    /// <summary>
+    /// Work-email domain of the founding admin (SRS AUTH-01-12). Lower-case, unique among
+    /// Companies, never a blocklisted free provider. Null for legacy rows.
+    /// </summary>
+    public string? EmailDomain { get; private set; }
 
     /// <summary>
     /// The Recruiter who created this company profile (set once at creation, immutable).
@@ -50,7 +57,9 @@ public class Company : Entity
         string? description = null,
         string? address = null,
         string? industry = null,
-        string? size = null)
+        string? size = null,
+        string? emailDomain = null,
+        bool verified = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name, nameof(name));
         if (createdBy == Guid.Empty)
@@ -64,6 +73,20 @@ public class Company : Entity
         Address = NormalizeOptional(address, AddressMaxLength, nameof(address));
         Industry = NormalizeOptional(industry, IndustryMaxLength, nameof(industry));
         Size = NormalizeOptional(size, SizeMaxLength, nameof(size));
+        EmailDomain = NormalizeOptional(emailDomain, EmailDomainMaxLength, nameof(emailDomain))?.ToLowerInvariant();
+        Verified = verified;
+    }
+
+    /// <summary>
+    /// Hands the admin role to another Recruiter (support approval, SRS AUTH-01-14).
+    /// The previous admin keeps the Recruiter role and the Company membership.
+    /// </summary>
+    public void TransferAdmin(Guid newAdmin)
+    {
+        if (newAdmin == Guid.Empty)
+            throw new ArgumentException("New admin cannot be empty.", nameof(newAdmin));
+        CreatedBy = newAdmin;
+        Touch();
     }
 
     public void Update(

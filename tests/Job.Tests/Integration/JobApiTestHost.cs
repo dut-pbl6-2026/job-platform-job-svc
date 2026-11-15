@@ -5,6 +5,7 @@ using Job.Api.Middleware;
 using Job.Api.Services;
 using Job.Core.Entities;
 using Job.Infrastructure.Data;
+using Job.Infrastructure.Clients;
 using Job.Infrastructure.Workers;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.TestHost;
@@ -40,6 +41,8 @@ internal sealed class JobApiTestHost : IAsyncDisposable
 
     public HttpClient Client { get; }
 
+    public IServiceProvider Services => _app.Services;
+
     public static async Task<JobApiTestHost> StartAsync()
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = Environments.Development });
@@ -56,6 +59,9 @@ internal sealed class JobApiTestHost : IAsyncDisposable
         builder.Services.AddDbContext<JobDbContext>(o => o.UseInMemoryDatabase(dbName));
         builder.Services.AddProblemDetails();
         builder.Services.AddSingleton<IKafkaProducer, NoOpKafkaProducer>();
+        // Unconfigured link client: approve/support-approve answer 503 unless a test registers a fake.
+        builder.Services.AddTransient<IAuthCompanyLinker>(sp =>
+            new AuthCompanyLinker(new HttpClient(), sp.GetRequiredService<IConfiguration>()));
 
         var app = builder.Build();
         app.UseExceptionHandler();
@@ -63,16 +69,25 @@ internal sealed class JobApiTestHost : IAsyncDisposable
         app.MapJobEndpoints();
         app.MapInternalJobEndpoints();
         app.MapCompanyEndpoints();
+        app.MapInviteCodeEndpoints();
+        app.MapInternalCompanyEndpoints();
+        app.MapCompanyJoinRequestEndpoints();
         await app.StartAsync();
         return new JobApiTestHost(app);
     }
 
+    /// <summary>
+    /// Seeds a Company created by <paramref name="recruiterId"/>. POST /api/companies is always 409 for a
+    /// Recruiter (AUTH-01-06), so tests seed the row directly.
+    /// </summary>
     public async Task<Guid> CreateCompanyAsync(Guid recruiterId, string name)
     {
-        using var response = await SendAsync(HttpMethod.Post, "/api/companies", recruiterId, "Recruiter",
-            new { name });
-        response.EnsureSuccessStatusCode();
-        return (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+        using var scope = _app.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<JobDbContext>();
+        var company = new Company(name, recruiterId);
+        db.Companies.Add(company);
+        await db.SaveChangesAsync();
+        return company.Id;
     }
 
     /// <summary>Seeds a job in the given status directly in the database (Pending/Rejected have no public write path here).</summary>

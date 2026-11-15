@@ -48,135 +48,31 @@ public class CompanyEndpointsTests : IDisposable
     private static HttpContext BuildAnonymousContext() =>
         new DefaultHttpContext { User = new ClaimsPrincipal() };
 
-    // ─── POST /api/companies ─────────────────────────────────────────────────
+    // ─── POST /api/companies (SRS AUTH-01-06: a Recruiter always has its Company) ──
 
     [Fact]
-    public async Task CreateCompany_Success_Returns201_AndSetsCreatedBy()
+    public async Task CreateCompany_Recruiter_Returns409_AccountAlreadyHasCompany()
     {
-        var dto = new CompanyCreateDto("TechCorp VN", "0123456789", Industry: "IT");
-        var ctx = BuildContext(_ownerId);
+        var result = await CompanyEndpointsInvoker.CreateCompany(BuildContext(_ownerId));
 
-        var result = await CompanyEndpointsInvoker.CreateCompany(dto, _db, ctx);
-
-        var status = Assert.IsAssignableFrom<IStatusCodeHttpResult>(result);
-        Assert.Equal(201, status.StatusCode);
-
-        var saved = await _db.Companies.FirstOrDefaultAsync(c => c.Name == "TechCorp VN");
-        Assert.NotNull(saved);
-        Assert.Equal("IT", saved!.Industry);
-        Assert.Equal("0123456789", saved.TaxCode);
-        // Ownership field must be set to the recruiter who created it
-        Assert.Equal(_ownerId, saved.CreatedBy);
-    }
-
-    [Fact]
-    public async Task CreateCompany_MissingName_Returns400()
-    {
-        var dto = new CompanyCreateDto("");
-        var ctx = BuildContext(_ownerId);
-
-        var result = await CompanyEndpointsInvoker.CreateCompany(dto, _db, ctx);
-
-        var status = Assert.IsAssignableFrom<IStatusCodeHttpResult>(result);
-        Assert.Equal(400, status.StatusCode);
-    }
-
-    [Fact]
-    public async Task CreateCompany_DuplicateName_Returns409()
-    {
-        _db.Companies.Add(new Company("DuplicateCorp", _ownerId));
-        await _db.SaveChangesAsync();
-
-        var dto = new CompanyCreateDto("DuplicateCorp");
-        var ctx = BuildContext(_ownerId);
-
-        var result = await CompanyEndpointsInvoker.CreateCompany(dto, _db, ctx);
-
-        var status = Assert.IsAssignableFrom<IStatusCodeHttpResult>(result);
-        Assert.Equal(409, status.StatusCode);
-    }
-
-    [Fact]
-    public async Task CreateCompany_DuplicateTaxCode_Returns409()
-    {
-        _db.Companies.Add(new Company("ExistingCorp", _ownerId, "TAX-001"));
-        await _db.SaveChangesAsync();
-
-        var dto = new CompanyCreateDto("NewCorp", TaxCode: "TAX-001");
-        var ctx = BuildContext(_ownerId);
-
-        var result = await CompanyEndpointsInvoker.CreateCompany(dto, _db, ctx);
-
-        var status = Assert.IsAssignableFrom<IStatusCodeHttpResult>(result);
-        Assert.Equal(409, status.StatusCode);
-    }
-
-    [Fact]
-    public async Task CreateCompany_Unauthenticated_Returns401()
-    {
-        var dto = new CompanyCreateDto("SomeCorp");
-        var ctx = BuildAnonymousContext();
-
-        var result = await CompanyEndpointsInvoker.CreateCompany(dto, _db, ctx);
-
-        var status = Assert.IsAssignableFrom<IStatusCodeHttpResult>(result);
-        Assert.Equal(401, status.StatusCode);
-    }
-
-    [Fact]
-    public async Task CreateCompany_InvalidGuidUserId_Returns401()
-    {
-        var dto = new CompanyCreateDto("SomeCorp");
-        var claims = new List<Claim>
-        {
-            new(ClaimTypes.NameIdentifier, "invalid-guid"),
-            new(ClaimTypes.Role, "Recruiter")
-        };
-        var ctx = new DefaultHttpContext
-        {
-            User = new ClaimsPrincipal(new ClaimsIdentity(claims, "Test"))
-        };
-
-        var result = await CompanyEndpointsInvoker.CreateCompany(dto, _db, ctx);
-
-        var status = Assert.IsAssignableFrom<IStatusCodeHttpResult>(result);
-        Assert.Equal(401, status.StatusCode);
+        Assert.Equal(409, ((IStatusCodeHttpResult)result).StatusCode);
+        Assert.Empty(_db.Companies);
     }
 
     [Fact]
     public async Task CreateCompany_NonRecruiter_Returns403()
     {
-        var dto = new CompanyCreateDto("SomeCorp");
-        var ctx = BuildContext(_ownerId, role: "User");
+        var result = await CompanyEndpointsInvoker.CreateCompany(BuildContext(_ownerId, "User"));
 
-        var result = await CompanyEndpointsInvoker.CreateCompany(dto, _db, ctx);
-
-        var status = Assert.IsAssignableFrom<IStatusCodeHttpResult>(result);
-        Assert.Equal(403, status.StatusCode);
+        Assert.Equal(403, ((IStatusCodeHttpResult)result).StatusCode);
     }
 
     [Fact]
-    public async Task CreateCompany_NameTooLong_Returns400()
+    public async Task CreateCompany_Unauthenticated_Returns401()
     {
-        var dto = new CompanyCreateDto(new string('A', 257)); // > Company.NameMaxLength (256)
-        var ctx = BuildContext(_ownerId);
+        var result = await CompanyEndpointsInvoker.CreateCompany(BuildAnonymousContext());
 
-        var result = await CompanyEndpointsInvoker.CreateCompany(dto, _db, ctx);
-
-        var status = Assert.IsAssignableFrom<IStatusCodeHttpResult>(result);
-        Assert.Equal(400, status.StatusCode);
-    }
-
-    [Fact]
-    public async Task CreateCompany_TaxCodeTooLong_Returns400()
-    {
-        var dto = new CompanyCreateDto("ValidCorp", TaxCode: new string('1', 21)); // > TaxCodeMaxLength (20)
-        var ctx = BuildContext(_ownerId);
-
-        var result = await CompanyEndpointsInvoker.CreateCompany(dto, _db, ctx);
-
-        var status = Assert.IsAssignableFrom<IStatusCodeHttpResult>(result);
-        Assert.Equal(400, status.StatusCode);
+        Assert.Equal(401, ((IStatusCodeHttpResult)result).StatusCode);
     }
 
     // ─── GET /api/companies ─────────────────────────────────────────────────
@@ -408,7 +304,7 @@ internal static class CompanyEndpointsInvoker
     {
         var type = typeof(CompanyEndpoints);
         const System.Reflection.BindingFlags flags =
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static;
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static;
 
         _createCompany = type.GetMethod("CreateCompany", flags)!;
         _getCompanies = type.GetMethod("GetCompanies", flags)!;
@@ -416,9 +312,8 @@ internal static class CompanyEndpointsInvoker
         _updateCompany = type.GetMethod("UpdateCompany", flags)!;
     }
 
-    public static async Task<IResult> CreateCompany(
-        CompanyCreateDto dto, JobDbContext db, HttpContext ctx) =>
-        await (Task<IResult>)_createCompany.Invoke(null, [dto, db, ctx])!;
+    public static Task<IResult> CreateCompany(HttpContext ctx) =>
+        Task.FromResult((IResult)_createCompany.Invoke(null, [ctx])!);
 
     public static async Task<IResult> GetCompanies(
         JobDbContext db, string? q, string? search, int page, int size) =>

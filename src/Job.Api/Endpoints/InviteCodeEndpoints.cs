@@ -9,17 +9,19 @@ using Microsoft.Extensions.Configuration;
 namespace Job.Api.Endpoints;
 
 /// <summary>
-/// SRS AUTH-01-09 recruiter invite codes.
+/// SRS AUTH-01-09 and AUTH-01-15 recruiter invite codes.
 /// <list type="bullet">
-/// <item><c>POST /api/companies/{id}/invite-codes</c>: public route, Recruiter only, company creator only. Plain code returned once.</item>
-/// <item><c>/api/internal/invite-codes/*</c>: auth-svc only. Bearer <c>JOB_INTERNAL_TOKEN_FOR_AUTH</c>, fails closed (401). Not gateway-routed.</item>
+/// <item><c>POST /api/companies/{id}/invite-codes</c>: public route, Recruiter only, company creator only. Body <c>{ email }</c>. Plain code returned once.</item>
+/// <item><c>/api/internal/invite-codes/*</c>: auth-svc only. Bearer <c>JOB_INTERNAL_TOKEN_FOR_AUTH</c>, fails closed (401). Not gateway-routed.
+/// <c>check</c> and <c>redeem</c> take <c>{ code, email }</c>.</item>
 /// </list>
-/// Every bad code (malformed, unknown, expired, used) returns the same <c>INVITE_CODE_INVALID</c> 422.
+/// Every bad code (malformed, unknown, expired, used, revoked, or bound to another address) returns the same <c>INVITE_CODE_INVALID</c> 422.
 /// </summary>
 public static class InviteCodeEndpoints
 {
     public const string InvalidCodeError = "INVITE_CODE_INVALID";
     public const string NotCreatorError = "INVITE_CODE_NOT_CREATOR";
+    public const string InvalidEmailError = "INVITE_EMAIL_INVALID";
     public const string CompanyNotFoundError = "COMPANY_NOT_FOUND";
     public const string TtlConfigKey = "INVITE_CODE_TTL_DAYS";
     public const int DefaultTtlDays = 7;
@@ -37,9 +39,11 @@ public static class InviteCodeEndpoints
         return app;
     }
 
-    public sealed record IssuedInviteCodeResponse(Guid Id, string Code, DateTimeOffset ExpiresAt);
+    public sealed record IssueInviteCodeRequest(string? Email);
 
-    public sealed record InviteCodeRequest(string? Code);
+    public sealed record IssuedInviteCodeResponse(Guid Id, string Code, string Email, DateTimeOffset ExpiresAt);
+
+    public sealed record InviteCodeRequest(string? Code, string? Email);
 
     public sealed record InviteCodeCheckResponse(Guid CompanyId, string CompanyName);
 
@@ -47,6 +51,7 @@ public static class InviteCodeEndpoints
 
     public static async Task<IResult> IssueInviteCodeAsync(
         Guid id,
+        IssueInviteCodeRequest? request,
         HttpContext ctx,
         JobDbContext db,
         IConfiguration config,
@@ -54,26 +59,31 @@ public static class InviteCodeEndpoints
     {
         var (userId, role) = IdentityHelper.GetIdentity(ctx);
         if (userId is null)
-            return Json(401, "Unauthorized", "Unauthorized. Missing or invalid user identity.");
+            return ApiErrors.Error(401, "UNAUTHORIZED", "Unauthorized. Missing or invalid user identity.");
         if (role != "Recruiter")
-            return Json(403, "Forbidden", "Forbidden. Recruiter role required.");
+            return ApiErrors.Error(403, "FORBIDDEN", "Forbidden. Recruiter role required.");
 
         var company = await db.Companies.AsNoTracking()
             .Where(c => c.Id == id)
             .Select(c => new { c.Id, c.CreatedBy })
             .FirstOrDefaultAsync(ct);
         if (company is null)
-            return Json(404, CompanyNotFoundError, "Company not found.");
+            return ApiErrors.Error(404, CompanyNotFoundError, "Company not found.");
 
         // Empty CreatedBy = legacy row from the AddCompanyCreatedBy migration: nobody may issue for it.
         if (company.CreatedBy == Guid.Empty || company.CreatedBy != userId.Value)
-            return Json(403, NotCreatorError, "Only the company creator can issue invite codes.");
+            return ApiErrors.Error(403, NotCreatorError, "Only the company creator can issue invite codes.");
+
+        var email = InviteCodeFormat.NormalizeEmail(request?.Email);
+        if (email is null)
+            return ApiErrors.Error(422, InvalidEmailError, "A valid email address is required.");
 
         var ttlDays = ReadTtlDays(config);
         var plain = InviteCodeFormat.Generate();
         var entity = new InviteCode(
             company.Id,
             InviteCodeFormat.Hash(plain),
+            email,
             userId.Value,
             DateTimeOffset.UtcNow,
             TimeSpan.FromDays(ttlDays));
@@ -84,7 +94,7 @@ public static class InviteCodeEndpoints
         // The plain code leaves this process once, in this response. Never log it.
         return Results.Created(
             $"/api/companies/{company.Id}/invite-codes/{entity.Id}",
-            new IssuedInviteCodeResponse(entity.Id, InviteCodeFormat.Display(plain), entity.ExpiresAt));
+            new IssuedInviteCodeResponse(entity.Id, InviteCodeFormat.Display(plain), email, entity.ExpiresAt));
     }
 
     public static async Task<IResult> CheckInviteCodeAsync(
@@ -94,16 +104,18 @@ public static class InviteCodeEndpoints
         IConfiguration config,
         CancellationToken ct = default)
     {
-        if (!IsInternalCallerAuthorized(ctx, config))
-            return Unauthorized();
+        if (!InternalCallerAuth.IsAuthCallerAuthorized(ctx, config))
+            return InternalCallerAuth.Unauthorized();
 
         var hash = NormalizeToHash(request.Code);
-        if (hash is null)
+        var email = InviteCodeFormat.NormalizeEmail(request.Email);
+        if (hash is null || email is null)
             return InvalidCode();
 
         var now = DateTimeOffset.UtcNow;
         var row = await db.InviteCodes.AsNoTracking()
-            .Where(c => c.CodeHash == hash && c.UsedAt == null && c.ExpiresAt > now)
+            .Where(c => c.CodeHash == hash && c.Email == email && c.Status == InviteCodeStatus.Active
+                        && c.UsedAt == null && c.ExpiresAt > now)
             .Join(db.Companies.AsNoTracking(), c => c.CompanyId, co => co.Id,
                 (c, co) => new { CompanyId = co.Id, CompanyName = co.Name })
             .FirstOrDefaultAsync(ct);
@@ -114,9 +126,9 @@ public static class InviteCodeEndpoints
     }
 
     /// <summary>
-    /// Atomic single use: one conditional UPDATE. Only one concurrent caller can match
-    /// <c>used_at IS NULL</c>. The in-memory provider (unit tests) cannot run ExecuteUpdateAsync,
-    /// so it falls back to a tracked update, as JobEndpoints does for view counts.
+    /// Atomic single use: one conditional UPDATE that also requires the bound email, Active status,
+    /// no used_at and no expiry. Only one concurrent caller can match. The in-memory provider
+    /// (unit tests) cannot run ExecuteUpdateAsync, so it falls back to a tracked update.
     /// </summary>
     public static async Task<IResult> RedeemInviteCodeAsync(
         InviteCodeRequest request,
@@ -125,16 +137,18 @@ public static class InviteCodeEndpoints
         IConfiguration config,
         CancellationToken ct = default)
     {
-        if (!IsInternalCallerAuthorized(ctx, config))
-            return Unauthorized();
+        if (!InternalCallerAuth.IsAuthCallerAuthorized(ctx, config))
+            return InternalCallerAuth.Unauthorized();
 
         var hash = NormalizeToHash(request.Code);
-        if (hash is null)
+        var email = InviteCodeFormat.NormalizeEmail(request.Email);
+        if (hash is null || email is null)
             return InvalidCode();
 
         var now = DateTimeOffset.UtcNow;
         var claimed = await db.InviteCodes.AsNoTracking()
-            .Where(c => c.CodeHash == hash && c.UsedAt == null && c.ExpiresAt > now)
+            .Where(c => c.CodeHash == hash && c.Email == email && c.Status == InviteCodeStatus.Active
+                        && c.UsedAt == null && c.ExpiresAt > now)
             .Select(c => c.Id)
             .FirstOrDefaultAsync(ct);
         if (claimed == Guid.Empty)
@@ -144,7 +158,7 @@ public static class InviteCodeEndpoints
         if (db.Database.ProviderName == "Microsoft.EntityFrameworkCore.InMemory")
         {
             var tracked = await db.InviteCodes.FirstAsync(c => c.Id == claimed, ct);
-            updated = tracked.UsedAt is null ? 1 : 0;
+            updated = tracked.IsRedeemable(email, now) ? 1 : 0;
             if (updated == 1)
             {
                 tracked.MarkUsed(now);
@@ -154,7 +168,8 @@ public static class InviteCodeEndpoints
         else
         {
             updated = await db.InviteCodes
-                .Where(c => c.CodeHash == hash && c.UsedAt == null && c.ExpiresAt > now)
+                .Where(c => c.Id == claimed && c.CodeHash == hash && c.Email == email
+                            && c.Status == InviteCodeStatus.Active && c.UsedAt == null && c.ExpiresAt > now)
                 .ExecuteUpdateAsync(s => s.SetProperty(c => c.UsedAt, now), ct);
         }
 
@@ -169,7 +184,11 @@ public static class InviteCodeEndpoints
         return Results.Ok(new InviteCodeRedeemResponse(redeemed.Id, redeemed.CompanyId));
     }
 
-    /// <summary>Clears <c>used_at</c> after auth-svc fails to create the user. Idempotent.</summary>
+    /// <summary>
+    /// Undoes a redeem after auth-svc fails to create the user. Idempotent. If the code was issued by a
+    /// previous admin (the admin changed since), it is revoked with <c>ADMIN_CHANGED</c> instead of
+    /// becoming usable again (AUTH-01-09, AUTH-01-14).
+    /// </summary>
     public static async Task<IResult> ReleaseInviteCodeAsync(
         Guid id,
         HttpContext ctx,
@@ -177,23 +196,22 @@ public static class InviteCodeEndpoints
         IConfiguration config,
         CancellationToken ct = default)
     {
-        if (!IsInternalCallerAuthorized(ctx, config))
-            return Unauthorized();
+        if (!InternalCallerAuth.IsAuthCallerAuthorized(ctx, config))
+            return InternalCallerAuth.Unauthorized();
 
-        if (db.Database.ProviderName == "Microsoft.EntityFrameworkCore.InMemory")
-        {
-            var tracked = await db.InviteCodes.FirstOrDefaultAsync(c => c.Id == id, ct);
-            if (tracked is not null)
-            {
-                tracked.ClearUsed();
-                await db.SaveChangesAsync(ct);
-            }
-        }
-        else
-        {
-            await db.InviteCodes.Where(c => c.Id == id)
-                .ExecuteUpdateAsync(s => s.SetProperty(c => c.UsedAt, (DateTimeOffset?)null), ct);
-        }
+        var code = await db.InviteCodes.FirstOrDefaultAsync(c => c.Id == id, ct);
+        if (code is null)
+            return Results.NoContent();
+
+        var currentAdmin = await db.Companies.AsNoTracking()
+            .Where(c => c.Id == code.CompanyId)
+            .Select(c => c.CreatedBy)
+            .FirstOrDefaultAsync(ct);
+
+        code.ClearUsed();
+        if (code.CreatedBy != currentAdmin)
+            code.RevokeUnused(DateTimeOffset.UtcNow, InviteCode.RevokeReasonAdminChanged);
+        await db.SaveChangesAsync(ct);
         return Results.NoContent();
     }
 
@@ -203,13 +221,6 @@ public static class InviteCodeEndpoints
         return int.TryParse(raw, out var days) && days > 0 ? days : DefaultTtlDays;
     }
 
-    private static bool IsInternalCallerAuthorized(HttpContext ctx, IConfiguration config)
-    {
-        var expected = config[InternalStatsEndpoints.AuthCallerTokenKey];
-        return !string.IsNullOrWhiteSpace(expected) &&
-               InternalStatsEndpoints.IsAuthorized(ctx.Request.Headers.Authorization.ToString(), expected);
-    }
-
     private static string? NormalizeToHash(string? raw)
     {
         var normalized = InviteCodeFormat.Normalize(raw);
@@ -217,11 +228,5 @@ public static class InviteCodeEndpoints
     }
 
     private static IResult InvalidCode() =>
-        Json(422, InvalidCodeError, "The invite code is invalid or has expired.");
-
-    private static IResult Unauthorized() =>
-        Results.Json(new { message = "Unauthorized" }, statusCode: 401);
-
-    private static IResult Json(int status, string errorCode, string message) =>
-        Results.Json(new { errorCode, message }, statusCode: status);
+        ApiErrors.Error(422, InvalidCodeError, "The invite code is invalid or has expired.");
 }

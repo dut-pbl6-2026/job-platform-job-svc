@@ -76,13 +76,18 @@ internal sealed class RecommendationTestHost : IAsyncDisposable
         using (var scope = app.Services.CreateScope())
             await SeedData.SeedCategoriesAsync(scope.ServiceProvider.GetRequiredService<JobDbContext>());
 
+        // POST /api/companies is always 409 for a Recruiter (AUTH-01-06), so the company is seeded directly.
         var recruiterId = Guid.NewGuid();
         var client = app.GetTestClient();
-        using var request = Request(HttpMethod.Post, "/api/companies", recruiterId, "Recruiter");
-        request.Content = JsonContent.Create(new { name = "Công ty ABC " + Guid.NewGuid().ToString("N")[..6] });
-        var response = await client.SendAsync(request);
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        var companyId = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+        Guid companyId;
+        using (var scope = app.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<JobDbContext>();
+            var company = new Job.Core.Entities.Company("Công ty ABC " + Guid.NewGuid().ToString("N")[..6], recruiterId);
+            db.Companies.Add(company);
+            await db.SaveChangesAsync();
+            companyId = company.Id;
+        }
 
         return new RecommendationTestHost(app, recruiterId, companyId);
     }

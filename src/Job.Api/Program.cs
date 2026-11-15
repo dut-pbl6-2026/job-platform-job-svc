@@ -103,6 +103,14 @@ else
 
 builder.Services.AddHostedService<OutboxPublisherService>();
 
+// SRS AUTH-01-12 / AUTH-01-14: auth-svc link call on join-request approval. Settings are read per call
+// (AUTH_SERVICE_URL, AUTH_INTERNAL_TOKEN_FOR_JOB); missing values answer 503 and never block startup.
+builder.Services.AddHttpClient<AuthCompanyLinker>(client => client.Timeout = TimeSpan.FromSeconds(5));
+builder.Services.AddTransient<IAuthCompanyLinker>(sp => sp.GetRequiredService<AuthCompanyLinker>());
+
+// SRS AUTH-01-13: daily expiry of pending join requests.
+builder.Services.AddHostedService<JoinRequestExpiryService>();
+
 // PBL6-10: recommendation read model. The consumer runs only when Kafka is configured.
 builder.Services.AddRecommendations(builder.Configuration);
 if (!string.IsNullOrWhiteSpace(kafkaServers))
@@ -185,6 +193,8 @@ app.MapAdminJobEndpoints();
 app.MapInternalStatsEndpoints();
 app.MapInternalJobEndpoints();
 app.MapInviteCodeEndpoints();
+app.MapInternalCompanyEndpoints();
+app.MapCompanyJoinRequestEndpoints();
 
 // PBL6-5: Kafka status at startup. Job events wait in the outbox until Kafka is configured.
 if (string.IsNullOrWhiteSpace(kafkaServers))

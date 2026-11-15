@@ -55,6 +55,27 @@ public sealed class InviteCodeFormatTests
         Assert.Null(InviteCodeFormat.Normalize(raw));
     }
 
+    [Theory]
+    [InlineData("  Ann.Lee@Example.COM ", "ann.lee@example.com")]
+    [InlineData("a@b.co", "a@b.co")]
+    public void NormalizeEmail_TrimsAndLowerCases(string raw, string expected)
+    {
+        Assert.Equal(expected, InviteCodeFormat.NormalizeEmail(raw));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("no-at-sign")]
+    [InlineData("@example.com")]
+    [InlineData("a@@example.com")]
+    [InlineData("a@")]
+    [InlineData("a b@example.com")]
+    public void NormalizeEmail_RejectsMalformedAddresses(string? raw)
+    {
+        Assert.Null(InviteCodeFormat.NormalizeEmail(raw));
+    }
+
     [Fact]
     public void Hash_IsSha256HexOfNormalisedCode()
     {
@@ -68,6 +89,7 @@ public sealed class InviteCodeFormatTests
 public sealed class InviteCodeEndpointTests : IDisposable
 {
     private const string InternalToken = "test-auth-caller-token";
+    private const string BoundEmail = "invitee@example.com";
     private static readonly Guid Creator = Guid.NewGuid();
     private readonly JobDbContext _db;
     private readonly IConfiguration _config;
@@ -99,27 +121,45 @@ public sealed class InviteCodeEndpointTests : IDisposable
     public async Task Issue_CreatorGetsPlainCodeOnceAndOnlyHashIsStored()
     {
         var result = await InviteCodeEndpoints.IssueInviteCodeAsync(
-            _companyId, RecruiterContext(Creator), _db, _config);
+            _companyId, Issue(BoundEmail), RecruiterContext(Creator), _db, _config);
 
         var created = Assert.IsType<Microsoft.AspNetCore.Http.HttpResults.Created<InviteCodeEndpoints.IssuedInviteCodeResponse>>(result);
         var body = created.Value!;
         Assert.Matches("^[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$", body.Code);
+        Assert.Equal(BoundEmail, body.Email);
 
         var stored = await _db.InviteCodes.SingleAsync();
         Assert.NotEqual(body.Code, stored.CodeHash);
         Assert.Equal(InviteCodeFormat.Hash(InviteCodeFormat.Normalize(body.Code)!), stored.CodeHash);
         Assert.Equal(_companyId, stored.CompanyId);
         Assert.Equal(Creator, stored.CreatedBy);
+        Assert.Equal(BoundEmail, stored.Email);
+        Assert.Equal(InviteCodeStatus.Active, stored.Status);
         Assert.Null(stored.UsedAt);
+        Assert.Null(stored.RevokedAt);
+        Assert.Null(stored.RevokeReason);
         var ttl = stored.ExpiresAt - DateTimeOffset.UtcNow;
         Assert.InRange(ttl.TotalDays, 6.99, 7.01);
+    }
+
+    [Fact]
+    public async Task Issue_EmailIsRequiredAndNormalised()
+    {
+        var missing = await InviteCodeEndpoints.IssueInviteCodeAsync(
+            _companyId, Issue(null), RecruiterContext(Creator), _db, _config);
+        Assert.Equal(422, ((IStatusCodeHttpResult)missing).StatusCode);
+        Assert.Empty(_db.InviteCodes);
+
+        var mixedCase = await InviteCodeEndpoints.IssueInviteCodeAsync(
+            _companyId, Issue("  Bob@Example.COM "), RecruiterContext(Creator), _db, _config);
+        Assert.Equal("bob@example.com", ((Microsoft.AspNetCore.Http.HttpResults.Created<InviteCodeEndpoints.IssuedInviteCodeResponse>)mixedCase).Value!.Email);
     }
 
     [Fact]
     public async Task Issue_NonCreatorRecruiterIsForbidden()
     {
         var result = await InviteCodeEndpoints.IssueInviteCodeAsync(
-            _companyId, RecruiterContext(Guid.NewGuid()), _db, _config);
+            _companyId, Issue(BoundEmail), RecruiterContext(Guid.NewGuid()), _db, _config);
 
         Assert.Equal(403, ((IStatusCodeHttpResult)result).StatusCode);
         Assert.Empty(_db.InviteCodes);
@@ -135,7 +175,7 @@ public sealed class InviteCodeEndpointTests : IDisposable
         await _db.SaveChangesAsync();
 
         var result = await InviteCodeEndpoints.IssueInviteCodeAsync(
-            legacy.Id, RecruiterContext(Guid.Empty), _db, _config);
+            legacy.Id, Issue(BoundEmail), RecruiterContext(Guid.Empty), _db, _config);
 
         Assert.Equal(403, ((IStatusCodeHttpResult)result).StatusCode);
     }
@@ -144,23 +184,35 @@ public sealed class InviteCodeEndpointTests : IDisposable
     public async Task Issue_NonRecruiterIsForbidden()
     {
         var result = await InviteCodeEndpoints.IssueInviteCodeAsync(
-            _companyId, RecruiterContext(Creator, role: "User"), _db, _config);
+            _companyId, Issue(BoundEmail), RecruiterContext(Creator, role: "User"), _db, _config);
 
         Assert.Equal(403, ((IStatusCodeHttpResult)result).StatusCode);
     }
 
     [Fact]
-    public async Task Check_ValidCodeReturnsCompany_AndDoesNotConsume()
+    public async Task Check_ValidCodeWithBoundEmailReturnsCompany_AndDoesNotConsume()
     {
         var code = await IssueAsync();
 
-        var first = await InviteCodeEndpoints.CheckInviteCodeAsync(
-            new InviteCodeEndpoints.InviteCodeRequest(code), AuthContext(), _db, _config);
-        var second = await InviteCodeEndpoints.CheckInviteCodeAsync(
-            new InviteCodeEndpoints.InviteCodeRequest(code), AuthContext(), _db, _config);
+        var first = await Check(code, BoundEmail);
+        var second = await Check(code, BoundEmail);
 
         Assert.Equal(200, ((IStatusCodeHttpResult)first).StatusCode);
         Assert.Equal(200, ((IStatusCodeHttpResult)second).StatusCode);
+        Assert.Null((await _db.InviteCodes.SingleAsync()).UsedAt);
+    }
+
+    [Fact]
+    public async Task Check_AndRedeem_WithAnotherEmail_AreRejectedWithTheSameError()
+    {
+        var code = await IssueAsync();
+
+        var check = await Check(code, "someone-else@example.com");
+        var redeem = await Redeem(code, "someone-else@example.com");
+
+        Assert.Equal(422, ((IStatusCodeHttpResult)check).StatusCode);
+        Assert.Equal(422, ((IStatusCodeHttpResult)redeem).StatusCode);
+        Assert.Null((await _db.InviteCodes.SingleAsync()).UsedAt);
     }
 
     [Fact]
@@ -168,10 +220,8 @@ public sealed class InviteCodeEndpointTests : IDisposable
     {
         var code = await IssueAsync();
 
-        var first = await InviteCodeEndpoints.RedeemInviteCodeAsync(
-            new InviteCodeEndpoints.InviteCodeRequest(code.ToLowerInvariant()), AuthContext(), _db, _config);
-        var second = await InviteCodeEndpoints.RedeemInviteCodeAsync(
-            new InviteCodeEndpoints.InviteCodeRequest(code), AuthContext(), _db, _config);
+        var first = await Redeem(code.ToLowerInvariant(), BoundEmail);
+        var second = await Redeem(code, BoundEmail);
 
         Assert.Equal(200, ((IStatusCodeHttpResult)first).StatusCode);
         Assert.Equal(422, ((IStatusCodeHttpResult)second).StatusCode);
@@ -179,19 +229,50 @@ public sealed class InviteCodeEndpointTests : IDisposable
     }
 
     [Fact]
+    public async Task Redeem_RequiresEmail()
+    {
+        var code = await IssueAsync();
+
+        var result = await InviteCodeEndpoints.RedeemInviteCodeAsync(
+            new InviteCodeEndpoints.InviteCodeRequest(code, null), AuthContext(), _db, _config);
+
+        Assert.Equal(422, ((IStatusCodeHttpResult)result).StatusCode);
+    }
+
+    [Fact]
     public async Task Release_ClearsUsedSoTheCodeCanBeRedeemedAgain()
     {
         var code = await IssueAsync();
-        var redeemed = await InviteCodeEndpoints.RedeemInviteCodeAsync(
-            new InviteCodeEndpoints.InviteCodeRequest(code), AuthContext(), _db, _config);
+        var redeemed = await Redeem(code, BoundEmail);
         var inviteCodeId = Assert.IsType<Microsoft.AspNetCore.Http.HttpResults.Ok<InviteCodeEndpoints.InviteCodeRedeemResponse>>(redeemed).Value!.InviteCodeId;
 
         var released = await InviteCodeEndpoints.ReleaseInviteCodeAsync(inviteCodeId, AuthContext(), _db, _config);
-        var again = await InviteCodeEndpoints.RedeemInviteCodeAsync(
-            new InviteCodeEndpoints.InviteCodeRequest(code), AuthContext(), _db, _config);
+        var again = await Redeem(code, BoundEmail);
 
         Assert.Equal(204, ((IStatusCodeHttpResult)released).StatusCode);
         Assert.Equal(200, ((IStatusCodeHttpResult)again).StatusCode);
+    }
+
+    [Fact]
+    public async Task Release_OfAPreviousAdminsCodeRevokesItInsteadOfReopeningIt()
+    {
+        var code = await IssueAsync();
+        var redeemed = await Redeem(code, BoundEmail);
+        var inviteCodeId = Assert.IsType<Microsoft.AspNetCore.Http.HttpResults.Ok<InviteCodeEndpoints.InviteCodeRedeemResponse>>(redeemed).Value!.InviteCodeId;
+
+        // The admin changes after the redeem (support approval) and before auth-svc releases the code.
+        var company = await _db.Companies.SingleAsync();
+        company.TransferAdmin(Guid.NewGuid());
+        await _db.SaveChangesAsync();
+
+        await InviteCodeEndpoints.ReleaseInviteCodeAsync(inviteCodeId, AuthContext(), _db, _config);
+
+        var stored = await _db.InviteCodes.SingleAsync();
+        Assert.Equal(InviteCodeStatus.Revoked, stored.Status);
+        Assert.Equal(InviteCode.RevokeReasonAdminChanged, stored.RevokeReason);
+        Assert.NotNull(stored.RevokedAt);
+        Assert.Null(stored.UsedAt);
+        Assert.Equal(422, ((IStatusCodeHttpResult)await Redeem(code, BoundEmail)).StatusCode);
     }
 
     [Fact]
@@ -203,10 +284,36 @@ public sealed class InviteCodeEndpointTests : IDisposable
             .SetValue(entity, DateTimeOffset.UtcNow.AddMinutes(-1));
         await _db.SaveChangesAsync();
 
-        var result = await InviteCodeEndpoints.CheckInviteCodeAsync(
-            new InviteCodeEndpoints.InviteCodeRequest(code), AuthContext(), _db, _config);
+        var result = await Check(code, BoundEmail);
 
         Assert.Equal(422, ((IStatusCodeHttpResult)result).StatusCode);
+    }
+
+    [Fact]
+    public async Task Check_RevokedCodeIsInvalid()
+    {
+        var code = await IssueAsync();
+        var entity = await _db.InviteCodes.SingleAsync();
+        Assert.True(entity.RevokeUnused(DateTimeOffset.UtcNow, InviteCode.RevokeReasonAdminChanged));
+        await _db.SaveChangesAsync();
+
+        var check = await Check(code, BoundEmail);
+        var redeem = await Redeem(code, BoundEmail);
+
+        Assert.Equal(422, ((IStatusCodeHttpResult)check).StatusCode);
+        Assert.Equal(422, ((IStatusCodeHttpResult)redeem).StatusCode);
+        Assert.Null((await _db.InviteCodes.SingleAsync()).UsedAt);
+    }
+
+    [Fact]
+    public void RevokeUnused_LeavesUsedCodesAlone()
+    {
+        var entity = new InviteCode(_companyId, InviteCodeFormat.Hash("ABCDEFGHJKLM"), BoundEmail, Creator,
+            DateTimeOffset.UtcNow, TimeSpan.FromDays(7));
+        entity.MarkUsed(DateTimeOffset.UtcNow);
+
+        Assert.False(entity.RevokeUnused(DateTimeOffset.UtcNow, InviteCode.RevokeReasonAdminChanged));
+        Assert.Equal(InviteCodeStatus.Active, entity.Status);
     }
 
     [Fact]
@@ -214,10 +321,8 @@ public sealed class InviteCodeEndpointTests : IDisposable
     {
         await IssueAsync();
 
-        var unknown = await InviteCodeEndpoints.CheckInviteCodeAsync(
-            new InviteCodeEndpoints.InviteCodeRequest("ZZZZ-ZZZZ-ZZZZ"), AuthContext(), _db, _config);
-        var malformed = await InviteCodeEndpoints.CheckInviteCodeAsync(
-            new InviteCodeEndpoints.InviteCodeRequest("nope"), AuthContext(), _db, _config);
+        var unknown = await Check("ZZZZ-ZZZZ-ZZZZ", BoundEmail);
+        var malformed = await Check("nope", BoundEmail);
 
         Assert.Equal(422, ((IStatusCodeHttpResult)unknown).StatusCode);
         Assert.Equal(422, ((IStatusCodeHttpResult)malformed).StatusCode);
@@ -230,9 +335,9 @@ public sealed class InviteCodeEndpointTests : IDisposable
         var unset = new ConfigurationBuilder().Build();
 
         var noConfig = await InviteCodeEndpoints.CheckInviteCodeAsync(
-            new InviteCodeEndpoints.InviteCodeRequest(code), AuthContext(), _db, unset);
+            new InviteCodeEndpoints.InviteCodeRequest(code, BoundEmail), AuthContext(), _db, unset);
         var wrongToken = await InviteCodeEndpoints.RedeemInviteCodeAsync(
-            new InviteCodeEndpoints.InviteCodeRequest(code), AuthContext("Bearer not-the-token"), _db, _config);
+            new InviteCodeEndpoints.InviteCodeRequest(code, BoundEmail), AuthContext("Bearer not-the-token"), _db, _config);
 
         Assert.Equal(401, ((IStatusCodeHttpResult)noConfig).StatusCode);
         Assert.Equal(401, ((IStatusCodeHttpResult)wrongToken).StatusCode);
@@ -249,12 +354,22 @@ public sealed class InviteCodeEndpointTests : IDisposable
         Assert.Equal(3, InviteCodeEndpoints.ReadTtlDays(custom));
     }
 
-    private async Task<string> IssueAsync()
+    private async Task<string> IssueAsync(string email = BoundEmail)
     {
         var result = await InviteCodeEndpoints.IssueInviteCodeAsync(
-            _companyId, RecruiterContext(Creator), _db, _config);
+            _companyId, Issue(email), RecruiterContext(Creator), _db, _config);
         return ((Microsoft.AspNetCore.Http.HttpResults.Created<InviteCodeEndpoints.IssuedInviteCodeResponse>)result).Value!.Code;
     }
+
+    private Task<IResult> Check(string code, string email) =>
+        InviteCodeEndpoints.CheckInviteCodeAsync(
+            new InviteCodeEndpoints.InviteCodeRequest(code, email), AuthContext(), _db, _config);
+
+    private Task<IResult> Redeem(string code, string email) =>
+        InviteCodeEndpoints.RedeemInviteCodeAsync(
+            new InviteCodeEndpoints.InviteCodeRequest(code, email), AuthContext(), _db, _config);
+
+    private static InviteCodeEndpoints.IssueInviteCodeRequest Issue(string? email) => new(email);
 
     private static HttpContext RecruiterContext(Guid userId, string role = "Recruiter")
     {
