@@ -138,6 +138,7 @@ docker run -p 5002:5002 --env-file .env job
 | `APP_SERVICE_URL` | — | required when backfill is on |
 | `JOB_INTERNAL_TOKEN_FOR_APP` | — | bearer token app-svc presents on `/api/internal/jobs/{id}`; required outside Development |
 | `JOB_INTERNAL_TOKEN_FOR_AUTH` | — | bearer token auth-svc presents on `/api/internal/stats`; required outside Development |
+| `INVITE_CODE_TTL_DAYS` | `7` | lifetime of a recruiter invite code (AUTH-01-09); single use |
 | `APP_INTERNAL_TOKEN_FOR_JOB` | — | bearer token job-svc presents to app-svc `/api/internal/applications` (backfill) |
 | `KAFKA_TOPIC_APPLICATION_EVENTS` | `application-events` | |
 | `KAFKA_GROUP_JOB_RECOMMENDER` | `job-svc-recommender` | never the shared `KAFKA_GROUP_ID` |
