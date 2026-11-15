@@ -9,16 +9,16 @@ using JobPosting = Job.Core.Entities.Job;
 namespace Job.Tests;
 
 /// <summary>
-/// App-svc recruiter ownership lookup. Must answer for Pending jobs (public queries hide them),
+/// App-svc job lookup. Must answer for jobs of any status (public queries hide Pending/Rejected),
 /// and must fail closed without the internal service token.
 /// </summary>
-public sealed class InternalJobOwnershipEndpointTests : IDisposable
+public sealed class InternalJobEndpointTests : IDisposable
 {
     private const string Token = "test-internal-token";
     private readonly JobDbContext _db;
     private readonly IConfiguration _config;
 
-    public InternalJobOwnershipEndpointTests()
+    public InternalJobEndpointTests()
     {
         var options = new DbContextOptionsBuilder<JobDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
@@ -44,8 +44,8 @@ public sealed class InternalJobOwnershipEndpointTests : IDisposable
     public async Task NoOrWrongToken_Returns401()
     {
         var jobId = Guid.NewGuid();
-        var none = await InternalJobOwnershipEndpoints.GetJobCompanyAsync(jobId, Context(null), _db, _config);
-        var wrong = await InternalJobOwnershipEndpoints.GetJobCompanyAsync(jobId, Context("Bearer nope"), _db, _config);
+        var none = await InternalJobEndpoints.GetJobAsync(jobId, Context(null), _db, _config);
+        var wrong = await InternalJobEndpoints.GetJobAsync(jobId, Context("Bearer nope"), _db, _config);
         Assert.Equal(401, ((IStatusCodeHttpResult)none).StatusCode);
         Assert.Equal(401, ((IStatusCodeHttpResult)wrong).StatusCode);
     }
@@ -54,36 +54,46 @@ public sealed class InternalJobOwnershipEndpointTests : IDisposable
     public async Task UnconfiguredToken_FailsClosed()
     {
         var noToken = new ConfigurationBuilder().Build();
-        var result = await InternalJobOwnershipEndpoints.GetJobCompanyAsync(
+        var result = await InternalJobEndpoints.GetJobAsync(
             Guid.NewGuid(), Context("Bearer anything"), _db, noToken);
         Assert.Equal(401, ((IStatusCodeHttpResult)result).StatusCode);
     }
 
     [Fact]
-    public async Task PendingJob_ReturnsItsCompany()
+    public async Task PendingJob_ReturnsCompanyStatusAndTitle()
     {
         var companyId = Guid.NewGuid();
-        var job = CreatePendingJob(companyId);
+        var job = new JobPosting("Pending job", "Awaiting admin approval", companyId, "Da Nang", Guid.NewGuid(), JobStatus.Pending);
         _db.Jobs.Add(job);
         await _db.SaveChangesAsync();
 
-        var result = await InternalJobOwnershipEndpoints.GetJobCompanyAsync(
-            job.Id, Context($"Bearer {Token}"), _db, _config);
+        var result = await InternalJobEndpoints.GetJobAsync(job.Id, Context($"Bearer {Token}"), _db, _config);
 
-        var ok = Assert.IsAssignableFrom<IStatusCodeHttpResult>(result);
-        Assert.Equal(200, ok.StatusCode);
-        var body = System.Text.Json.JsonSerializer.Serialize(((IValueHttpResult)result).Value);
-        Assert.Contains(companyId.ToString(), body, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(200, ((IStatusCodeHttpResult)result).StatusCode);
+        var body = Assert.IsType<InternalJobEndpoints.InternalJobResponse>(((IValueHttpResult)result).Value);
+        Assert.Equal(companyId, body.CompanyId);
+        Assert.Equal("Pending", body.Status);
+        Assert.Equal("Pending job", body.Title);
+    }
+
+    [Fact]
+    public async Task ActiveJob_ReturnsActiveStatus()
+    {
+        var job = new JobPosting("Active job", "Open", Guid.NewGuid(), "Hanoi", Guid.NewGuid());
+        _db.Jobs.Add(job);
+        await _db.SaveChangesAsync();
+
+        var result = await InternalJobEndpoints.GetJobAsync(job.Id, Context($"Bearer {Token}"), _db, _config);
+
+        var body = Assert.IsType<InternalJobEndpoints.InternalJobResponse>(((IValueHttpResult)result).Value);
+        Assert.Equal("Active", body.Status);
     }
 
     [Fact]
     public async Task UnknownJob_Returns404()
     {
-        var result = await InternalJobOwnershipEndpoints.GetJobCompanyAsync(
+        var result = await InternalJobEndpoints.GetJobAsync(
             Guid.NewGuid(), Context($"Bearer {Token}"), _db, _config);
         Assert.Equal(404, ((IStatusCodeHttpResult)result).StatusCode);
     }
-
-    private static JobPosting CreatePendingJob(Guid companyId) =>
-        new("Pending job", "Awaiting admin approval", companyId, "Da Nang", Guid.NewGuid(), JobStatus.Pending);
 }

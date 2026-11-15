@@ -197,7 +197,7 @@ app.MapJobEndpoints();
 app.MapRecommendationEndpoints();
 app.MapAdminJobEndpoints();
 app.MapInternalStatsEndpoints();
-app.MapInternalJobOwnershipEndpoints();
+app.MapInternalJobEndpoints();
 
 // PBL6-19 (S-2): surface search-sync wiring once at startup — a missing
 // SEARCH_SYNC_URL silently disables indexing, which must never go unnoticed.
