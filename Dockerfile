@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:11.0 AS build
 WORKDIR /src
 COPY src/Job.Core/Job.Core.csproj src/Job.Core/
 COPY src/Job.Infrastructure/Job.Infrastructure.csproj src/Job.Infrastructure/
