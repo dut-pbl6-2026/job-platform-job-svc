@@ -293,6 +293,69 @@ public sealed class OutboxPublisherTests
         Assert.Equal(jobId, Assert.IsType<JobDeletedEvent>(producer.Payload).JobId);
     }
 
+    [Fact]
+    public async Task PublishPending_EmptyOutbox_ReturnsFalseAndProducesNothing()
+    {
+        var producer = new RecordingKafkaProducer();
+        await using var provider = BuildProvider(producer, out _);
+
+        using var service = CreateService(provider, new FixedTimeProvider(Start));
+
+        Assert.False(await service.PublishPendingAsync(CancellationToken.None));
+        Assert.Equal(0, producer.Attempts);
+    }
+
+    [Fact]
+    public async Task ProcessBatch_FailureMidBatch_StopsCycleAndLeavesRemainingRowForLater()
+    {
+        // The first publish succeeds, the second fails: the cycle must stop there, so the third row
+        // is never attempted in this cycle.
+        var producer = new RecordingKafkaProducer { FailFromAttempt = 2 };
+        await using var provider = BuildProvider(producer, out var databaseName);
+        await using (var seedDb = CreateDb(databaseName))
+        {
+            for (var i = 0; i < 3; i++)
+                seedDb.OutboxEvents.Add(CreateEvent(Guid.NewGuid()));
+            await seedDb.SaveChangesAsync();
+        }
+
+        using var service = CreateService(provider, new FixedTimeProvider(Start));
+
+        Assert.False(await service.PublishPendingAsync(CancellationToken.None));
+
+        Assert.Equal(2, producer.Attempts);
+        await using var verifyDb = CreateDb(databaseName);
+        var rows = await verifyDb.OutboxEvents.ToListAsync();
+        Assert.Equal(1, rows.Count(r => r.IsPublished));
+        Assert.Equal(2, rows.Count(r => !r.IsPublished));
+        Assert.Equal(1, rows.Single(r => !r.IsPublished && r.RetryCount == 1).RetryCount);
+        Assert.Equal(1, rows.Count(r => !r.IsPublished && r.RetryCount == 0));
+    }
+
+    [Fact]
+    public async Task ProcessBatch_UnsupportedEventType_IsNeverDroppedAndNeverProduced()
+    {
+        var producer = new RecordingKafkaProducer();
+        await using var provider = BuildProvider(producer, out var databaseName);
+        await using (var seedDb = CreateDb(databaseName))
+        {
+            seedDb.OutboxEvents.Add(new OutboxEvent("job.unknown", "{}", Guid.NewGuid().ToString()));
+            await seedDb.SaveChangesAsync();
+        }
+
+        var clock = new FixedTimeProvider(Start);
+        using var service = CreateService(provider, clock);
+
+        Assert.False(await service.PublishPendingAsync(CancellationToken.None));
+
+        Assert.Equal(0, producer.Attempts);
+        await using var verifyDb = CreateDb(databaseName);
+        var saved = await verifyDb.OutboxEvents.SingleAsync();
+        Assert.False(saved.IsPublished);
+        Assert.Equal(1, saved.RetryCount);
+        Assert.Equal(Start + OutboxRetryPolicy.BaseDelay, saved.NextAttemptAt);
+    }
+
     private static OutboxPublisherService CreateService(
         ServiceProvider provider, TimeProvider clock, ILogger<OutboxPublisherService>? logger = null) =>
         new(
@@ -375,6 +438,8 @@ public sealed class OutboxPublisherTests
     private sealed class RecordingKafkaProducer : IKafkaProducer
     {
         public bool ShouldFail { get; init; }
+        /// <summary>When set, publish attempts numbered this and later (1-based) fail; earlier ones succeed.</summary>
+        public int? FailFromAttempt { get; init; }
         public int Attempts { get; private set; }
         public string? Topic { get; private set; }
         public string? EventType { get; private set; }
@@ -387,7 +452,7 @@ public sealed class OutboxPublisherTests
             CancellationToken ct = default)
         {
             Attempts++;
-            if (ShouldFail)
+            if (ShouldFail || (FailFromAttempt is int n && Attempts >= n))
                 throw new InvalidOperationException("Kafka unavailable.");
 
             Topic = topic;
