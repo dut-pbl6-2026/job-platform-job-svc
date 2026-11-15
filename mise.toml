@@ -21,10 +21,6 @@ run = "dotnet ef migrations has-pending-model-changes --project src/Job.Infrastr
 description = "Run Job API service locally"
 run = "dotnet run --project src/Job.Api"
 
-[tasks.pack-shared]
-description = "Pack SharedKernel and copy to local-feed"
-run = "dotnet pack ../job-platform-shared/src/SharedKernel/SharedKernel.csproj -c Release -o ../job-platform-shared/artifacts && cp ../job-platform-shared/artifacts/*.nupkg local-feed/"
-
 [tasks.sync-env]
 description = "Sync env from infra (ORG=dut-pbl6-2026)"
 run = "../job-platform-infra/scripts/sync-env.sh dev"

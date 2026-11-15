@@ -8,7 +8,7 @@ Job service for **Vietnam Job Platform** (`pbl6`) — `dut-pbl6-2026`. `Job CRUD
 - `src/Job.Core` — Domain (`Job` `Category` `Company` `SavedJob` `: Entity`)
 - `src/Job.Infrastructure` — `JobDbContext` `Npgsql` `Migrations` `SeedData`
 - `tests` — `xunit` entity tests
-- `local-feed` — `JobPlatform.SharedKernel 0.1.0` via `nuget.config`
+- GitHub Packages feed (`nuget.config`) — `JobPlatform.SharedKernel 0.3.1`; restore needs `GITHUB_TOKEN` with `read:packages`
 
 ## Prerequisites
 
