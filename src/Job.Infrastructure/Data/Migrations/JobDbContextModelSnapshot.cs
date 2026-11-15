@@ -69,6 +69,10 @@ namespace Job.Infrastructure.Data.Migrations
                     b.Property<string>("Description")
                         .HasColumnType("text");
 
+                    b.Property<string>("EmailDomain")
+                        .HasMaxLength(253)
+                        .HasColumnType("character varying(253)");
+
                     b.Property<string>("Industry")
                         .HasMaxLength(128)
                         .HasColumnType("character varying(128)");
@@ -106,6 +110,10 @@ namespace Job.Infrastructure.Data.Migrations
 
                     b.HasIndex("CreatedBy");
 
+                    b.HasIndex("EmailDomain")
+                        .IsUnique()
+                        .HasFilter("\"EmailDomain\" IS NOT NULL");
+
                     b.HasIndex("Name")
                         .IsUnique()
                         .HasDatabaseName("IX_Companies_Name_Lower");
@@ -115,6 +123,54 @@ namespace Job.Infrastructure.Data.Migrations
                         .HasFilter("\"TaxCode\" IS NOT NULL");
 
                     b.ToTable("Companies");
+                });
+
+            modelBuilder.Entity("Job.Core.Entities.CompanyJoinRequest", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("CompanyId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("DecidedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("DecidedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("DecisionReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CompanyId");
+
+                    b.HasIndex("ExpiresAt");
+
+                    b.HasIndex("UserId")
+                        .IsUnique();
+
+                    b.ToTable("CompanyJoinRequests");
                 });
 
             modelBuilder.Entity("Job.Core.Entities.InviteCode", b =>
@@ -137,8 +193,27 @@ namespace Job.Infrastructure.Data.Migrations
                     b.Property<Guid>("CreatedBy")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasMaxLength(320)
+                        .HasColumnType("character varying(320)");
+
                     b.Property<DateTimeOffset>("ExpiresAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("RevokeReason")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTimeOffset?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasDefaultValue("Active");
 
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -381,6 +456,15 @@ namespace Job.Infrastructure.Data.Migrations
                         .IsUnique();
 
                     b.ToTable("SavedJobs");
+                });
+
+            modelBuilder.Entity("Job.Core.Entities.CompanyJoinRequest", b =>
+                {
+                    b.HasOne("Job.Core.Entities.Company", null)
+                        .WithMany()
+                        .HasForeignKey("CompanyId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Job.Core.Entities.InviteCode", b =>

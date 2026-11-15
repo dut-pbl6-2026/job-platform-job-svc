@@ -43,11 +43,17 @@ public sealed class RecommendationMetricsTests
         var client = app.GetTestClient();
 
         var recruiter = Guid.NewGuid();
-        using (var company = RecommendationTestHost.Request(HttpMethod.Post, "/api/companies", recruiter, "Recruiter"))
+        // POST /api/companies is always 409 for a Recruiter (AUTH-01-06), so the company is seeded directly.
+        Guid companyId;
+        using (var scope = app.Services.CreateScope())
         {
-            company.Content = System.Net.Http.Json.JsonContent.Create(new { name = "Metrics " + Guid.NewGuid().ToString("N")[..6] });
-            var companyId = (await (await client.SendAsync(company)).Content
-                .ReadFromJsonAsync<System.Text.Json.JsonElement>()).GetProperty("id").GetGuid();
+            var db = scope.ServiceProvider.GetRequiredService<Job.Infrastructure.Data.JobDbContext>();
+            var seeded = new Job.Core.Entities.Company("Metrics " + Guid.NewGuid().ToString("N")[..6], recruiter);
+            db.Companies.Add(seeded);
+            await db.SaveChangesAsync();
+            companyId = seeded.Id;
+        }
+        {
             using var job = RecommendationTestHost.Request(HttpMethod.Post, "/api/jobs", recruiter, "Recruiter");
             job.Content = System.Net.Http.Json.JsonContent.Create(new
             {

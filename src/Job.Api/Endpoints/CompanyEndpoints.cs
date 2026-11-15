@@ -9,7 +9,7 @@ namespace Job.Api.Endpoints;
 
 /// <summary>
 /// Company endpoints per SRS D.1 lines 220-223 and JOB-01.
-/// POST   /api/companies      — Create company (Recruiter only)
+/// POST   /api/companies      — always 409 ACCOUNT_ALREADY_HAS_COMPANY for a Recruiter (AUTH-01-06)
 /// GET    /api/companies      — Public list with search &amp; pagination
 /// GET    /api/companies/{id} — Public detail
 /// PUT    /api/companies/{id} — Update company (owner Recruiter only)
@@ -19,15 +19,15 @@ namespace Job.Api.Endpoints;
 /// </summary>
 public static class CompanyEndpoints
 {
+    public const string AccountAlreadyHasCompanyError = "ACCOUNT_ALREADY_HAS_COMPANY";
+
     public static WebApplication MapCompanyEndpoints(this WebApplication app)
     {
         var group = app.MapGroup("/api/companies").WithTags("Companies");
 
         group.MapPost("/", CreateCompany)
             .WithName("CreateCompany")
-            .WithSummary("Create a new company profile (Recruiter only)")
-            .Produces(StatusCodes.Status201Created)
-            .ProducesValidationProblem(StatusCodes.Status400BadRequest)
+            .WithSummary("Always 409 for a Recruiter: a Recruiter account already has its Company (AUTH-01-06)")
             .Produces(StatusCodes.Status401Unauthorized)
             .Produces(StatusCodes.Status403Forbidden)
             .Produces(StatusCodes.Status409Conflict);
@@ -107,15 +107,13 @@ public static class CompanyEndpoints
     }
 
     /// <summary>
-    /// POST /api/companies — Recruiter creates a new company profile.
-    /// Sets CreatedBy to the current recruiter's userId.
-    /// Validates uniqueness of Name and TaxCode (SEC-05 EF parameterized queries).
-    /// Returns 201 Created with {id, message}.
+    /// POST /api/companies (SRS AUTH-01-06). A Recruiter account already has exactly one Company, set at
+    /// company sign-up or by invite code, so this endpoint always answers
+    /// <c>409 ACCOUNT_ALREADY_HAS_COMPANY</c> for a Recruiter and creates nothing (backlog C14 for removal).
+    /// The gateway JWT carries no company claim, so job-svc cannot tell a Recruiter apart by company.
+    /// Other callers keep the role rule (403).
     /// </summary>
-    private static async Task<IResult> CreateCompany(
-        CompanyCreateDto dto,
-        JobDbContext db,
-        HttpContext ctx)
+    public static IResult CreateCompany(HttpContext ctx)
     {
         var (userId, role) = IdentityHelper.GetIdentity(ctx);
         if (userId is null)
@@ -123,69 +121,8 @@ public static class CompanyEndpoints
         if (role != "Recruiter")
             return ForbiddenResult();
 
-        var fieldErrors = ValidateCompanyFields(
-            dto.Name, dto.TaxCode, dto.LogoUrl, dto.Website,
-            dto.Address, dto.Industry, dto.Size);
-        if (fieldErrors is not null)
-            return fieldErrors;
-
-        var trimmedName = dto.Name.Trim();
-
-        // SEC-05: parameterized via EF — no raw string concat
-        var nameExists = await db.Companies
-            .AnyAsync(c => c.Name.ToLower() == trimmedName.ToLower());
-        if (nameExists)
-            return Results.Conflict(new { message = "Company name already exists." });
-
-        if (!string.IsNullOrWhiteSpace(dto.TaxCode))
-        {
-            // MST codes are numeric — compare case-insensitively for robustness
-            var trimmedTax = dto.TaxCode.Trim().ToLower();
-            var taxExists = await db.Companies.AnyAsync(c =>
-                c.TaxCode != null && c.TaxCode.ToLower() == trimmedTax);
-            if (taxExists)
-                return Results.Conflict(new { message = "Tax code already registered." });
-        }
-
-        Company company;
-        try
-        {
-            // CreatedBy = current recruiter's userId (ownership)
-            company = new Company(
-                trimmedName,
-                userId.Value,
-                dto.TaxCode,
-                dto.LogoUrl,
-                dto.Website,
-                dto.Description,
-                dto.Address,
-                dto.Industry,
-                dto.Size
-            );
-        }
-        catch (ArgumentException ex)
-        {
-            return Results.ValidationProblem(new Dictionary<string, string[]>
-            { ["request"] = [ex.Message] });
-        }
-
-        db.Companies.Add(company);
-        try
-        {
-            await db.SaveChangesAsync();
-        }
-        catch (DbUpdateException ex)
-            when (ex.InnerException is PostgresException { SqlState: "23505" })
-        {
-            // Concurrent duplicate slipped past the AnyAsync check — return 409 instead of 500.
-            return Results.Conflict(new { message = "Company name or tax code already exists." });
-        }
-
-        return Results.Created($"/api/companies/{company.Id}", new
-        {
-            id = company.Id,
-            message = "Company created successfully"
-        });
+        return ApiErrors.Error(409, AccountAlreadyHasCompanyError,
+            "This account already belongs to a company.");
     }
 
     /// <summary>

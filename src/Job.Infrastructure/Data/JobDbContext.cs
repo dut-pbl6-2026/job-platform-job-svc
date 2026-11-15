@@ -1,4 +1,5 @@
 using Job.Core.Entities;
+using Job.Core.InviteCodes;
 using Microsoft.EntityFrameworkCore;
 using JobPosting = Job.Core.Entities.Job;
 
@@ -21,6 +22,9 @@ public class JobDbContext : DbContext
 
     // SRS AUTH-01-09: recruiter invite codes (hashed, single use, 7-day expiry).
     public DbSet<InviteCode> InviteCodes => Set<InviteCode>();
+
+    // SRS AUTH-01-12: work-email sign-up whose domain belongs to a verified Company.
+    public DbSet<CompanyJoinRequest> CompanyJoinRequests => Set<CompanyJoinRequest>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -59,6 +63,11 @@ public class JobDbContext : DbContext
             e.Property(x => x.Address).HasMaxLength(Company.AddressMaxLength);
             e.Property(x => x.Industry).HasMaxLength(Company.IndustryMaxLength);
             e.Property(x => x.Size).HasMaxLength(Company.SizeMaxLength);
+            // SRS AUTH-01-12: at most one Company per work-email domain. Stored lower-case.
+            e.Property(x => x.EmailDomain).HasMaxLength(Company.EmailDomainMaxLength);
+            e.HasIndex(x => x.EmailDomain)
+                .IsUnique()
+                .HasFilter("\"EmailDomain\" IS NOT NULL");
             // Ownership tracking — set at creation, used for PUT authorization
             e.Property(x => x.CreatedBy).IsRequired();
             e.HasIndex(x => x.CreatedBy);
@@ -150,7 +159,22 @@ public class JobDbContext : DbContext
             e.HasKey(x => x.Id);
             e.Property(x => x.CodeHash).HasMaxLength(64).IsRequired();
             e.HasIndex(x => x.CodeHash).IsUnique();
+            e.Property(x => x.Email).HasMaxLength(InviteCodeFormat.EmailMaxLength).IsRequired();
+            e.Property(x => x.Status).HasConversion<string>().HasMaxLength(32).HasDefaultValue(InviteCodeStatus.Active);
+            e.Property(x => x.RevokeReason).HasMaxLength(64);
             e.HasIndex(x => x.CompanyId);
+            e.HasOne<Company>().WithMany().HasForeignKey(x => x.CompanyId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // SRS AUTH-01-12: one join request per account (UserId unique); expiry scanned by the daily job.
+        b.Entity<CompanyJoinRequest>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Status).HasConversion<string>().HasMaxLength(32).IsRequired();
+            e.Property(x => x.DecisionReason).HasMaxLength(CompanyJoinRequest.DecisionReasonMaxLength);
+            e.HasIndex(x => x.UserId).IsUnique();
+            e.HasIndex(x => x.CompanyId);
+            e.HasIndex(x => x.ExpiresAt);
             e.HasOne<Company>().WithMany().HasForeignKey(x => x.CompanyId).OnDelete(DeleteBehavior.Restrict);
         });
     }

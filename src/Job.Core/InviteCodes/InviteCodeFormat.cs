@@ -55,6 +55,25 @@ public static class InviteCodeFormat
         return normalized;
     }
 
+    public const int EmailMaxLength = 320;
+
+    /// <summary>
+    /// Normalises the bound address (trimmed, lower-case, AUTH-01-15). Returns null for an
+    /// empty value or one without a local part and a domain.
+    /// </summary>
+    public static string? NormalizeEmail(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+        var email = raw.Trim().ToLowerInvariant();
+        if (email.Length > EmailMaxLength)
+            return null;
+        var at = email.IndexOf('@', StringComparison.Ordinal);
+        return at <= 0 || at != email.LastIndexOf('@') || at == email.Length - 1 || email.Any(char.IsWhiteSpace)
+            ? null
+            : email;
+    }
+
     /// <summary>SHA-256 of the normalised code, lower-case hex (64 characters).</summary>
     public static string Hash(string normalized) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized))).ToLowerInvariant();
