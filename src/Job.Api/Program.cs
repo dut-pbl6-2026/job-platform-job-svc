@@ -1,4 +1,5 @@
 using System.Text;
+using Job.Api.Auth;
 using Job.Api.Bootstrap;
 using Job.Api.Endpoints;
 using Job.Api.Health;
@@ -53,30 +54,8 @@ builder.Services.AddJobHealthChecks();
 // (git-strategy AGENTS.md JWT section)
 if (!builder.Environment.IsDevelopment())
 {
-    var jwtSection = builder.Configuration.GetSection(JwtOptions.SectionName);
-    var jwt = jwtSection.Get<JwtOptions>() ?? new JwtOptions();
-
-    // SEC-08: never hardcode secret in prod — fail fast if not configured
-    if (string.IsNullOrEmpty(jwt.Secret) || jwt.Secret.Length < 32)
-        throw new InvalidOperationException(
-            "JWT secret not configured or too short. Set JWT_SECRET env var (min 32 chars) or Jwt:Secret in configuration.");
-
-    builder.Services
-        .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-        .AddJwtBearer(o =>
-        {
-            o.TokenValidationParameters = new TokenValidationParameters
-            {
-                ValidateIssuer = true,
-                ValidateAudience = true,
-                ValidateLifetime = true,
-                ValidateIssuerSigningKey = true,
-                ValidIssuer = jwt.Issuer,
-                ValidAudience = jwt.Audience,
-                IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwt.Secret)),
-                ClockSkew = TimeSpan.Zero // SEC-01
-            };
-        });
+    // RS256 access tokens from auth-svc, keys from its JWKS (Jwt:MetadataAddress). No shared secret.
+    builder.Services.AddRs256JwtBearer(builder.Configuration);
     builder.Services.AddAuthorization();
 }
 
