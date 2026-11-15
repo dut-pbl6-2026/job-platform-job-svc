@@ -184,6 +184,7 @@ app.MapRecommendationEndpoints();
 app.MapAdminJobEndpoints();
 app.MapInternalStatsEndpoints();
 app.MapInternalJobEndpoints();
+app.MapInviteCodeEndpoints();
 
 // PBL6-5: Kafka status at startup. Job events wait in the outbox until Kafka is configured.
 if (string.IsNullOrWhiteSpace(kafkaServers))
