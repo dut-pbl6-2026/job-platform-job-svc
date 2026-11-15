@@ -43,7 +43,7 @@ Dependency: `Api → Infrastructure → Core → SharedKernel` (`PackageReferenc
 
 ## JWT (SharedKernel JwtOptions)
 
-Gateway validates JWT before forwarding `X-User-Id` / `X-User-Role` headers. Job service **does not** validate JWT directly — it trusts gateway-injected headers. When reading identity: `context.Request.Headers["X-User-Id"]` → `Guid.Parse(...)`. Validate non-empty headers on every protected endpoint. Fallback dev secret: **never** hardcode; read from `JWT_SECRET` env var (see AGENTS.md no-hard-code table).
+Gateway validates JWT before forwarding `X-User-Id` / `X-User-Role` headers. Job service also validates the bearer itself outside Development (`Auth/JwtBearerRs256.cs`, RS256 only, keys from auth-svc's JWKS via `Jwt__MetadataAddress`, no shared secret). Identity still comes from the gateway headers: when reading identity: `context.Request.Headers["X-User-Id"]` → `Guid.Parse(...)`. Validate non-empty headers on every protected endpoint.
 
 Validate in `Program.cs` (when JWT Bearer is added in W2): `ValidateIssuer=true Audience=job-platform ClockSkew=Zero`. Reference: `shared/JwtOptions.cs SectionName=Jwt`.
 
@@ -114,13 +114,13 @@ var conn = builder.Configuration.GetConnectionString("JobDb")
 - `appsettings.json` MAY contain **placeholder comments** like `"<set via env>"` but MUST NOT contain real credentials or real hostnames.
 - `appsettings.Development.json` MAY point to `localhost` **only** for local-dev convenience; never commit real passwords.
 - The single source of truth for all env values is `../job-platform-infra/envs/.env.dev.example` — use `mise run sync-env` to pull it.
-- Required env vars for this service: `DATABASE_URL_JOB`, `JWT_SECRET`.
+- Required env vars for this service: `DATABASE_URL_JOB`, `Jwt__MetadataAddress` (outside Development).
 
 ## 2026 best practice (NFR `MAINT`)
 
 - `dotnet 10.0.100` `net10.0` `nullable enable` `ImplicitUsings` file-scoped namespace, `ProblemDetails` + `UseExceptionHandler` + `ILogger` JSON `ERROR/WARN/INFO/DEBUG`, `GET /health` per `8-system-architecture.md`.
 - `dotnet build --warnaserror` + `dotnet format --verify-no-changes` (mise `build/test/format`), `EF` alignment `EF10.0.4` + `Npgsql10.0.3`, coverage `>70%` `MAINT-02`.
-- Never commit `.env` (`.gitignore`), `mise run sync-env` single source `../job-platform-infra/envs/.env.dev.example` (`DATABASE_URL_JOB`, `JWT_SECRET`).
+- Never commit `.env` (`.gitignore`), `mise run sync-env` single source `../job-platform-infra/envs/.env.dev.example` (`DATABASE_URL_JOB`, `Jwt__MetadataAddress`).
 
 ## Workflow
 
