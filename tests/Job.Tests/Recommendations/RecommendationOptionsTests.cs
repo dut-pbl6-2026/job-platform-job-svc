@@ -28,13 +28,13 @@ public sealed class RecommendationOptionsTests
             ["RECOMMENDATION_CACHE_TTL_HOURS"] = "2",
             ["RECOMMENDATION_BACKFILL_ENABLED"] = "true",
             ["APP_SERVICE_URL"] = "http://app:5004",
-            ["INTERNAL_SERVICE_TOKEN"] = "secret",
+            ["APP_INTERNAL_TOKEN_FOR_JOB"] = "secret",
         });
 
         Assert.Equal(2, options.CacheTtlHours);
         Assert.True(options.BackfillEnabled);
         Assert.Equal("http://app:5004", options.AppServiceUrl);
-        Assert.Equal("secret", options.InternalServiceToken);
+        Assert.Equal("secret", options.AppInternalToken);
         Assert.Empty(options.Validate());
     }
 

@@ -133,9 +133,27 @@ public sealed class InternalStatsEndpointTests : IDisposable
         new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                [InternalStatsEndpoints.TokenConfigKey] = token,
+                [InternalStatsEndpoints.AuthCallerTokenKey] = token,
             })
             .Build();
+
+    [Fact]
+    public async Task AppCallerToken_IsRejected_EvenWhenConfigured()
+    {
+        // Only auth-svc's token opens this endpoint; the token issued to app-svc must not.
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [InternalStatsEndpoints.AuthCallerTokenKey] = Token,
+                [InternalJobEndpoints.AppCallerTokenKey] = "test-app-caller-token",
+            })
+            .Build();
+
+        var result = await InternalStatsEndpointInvoker.GetStats(
+            Context("Bearer test-app-caller-token"), _db, config, NullLoggerFactory.Instance);
+
+        Assert.Equal(401, ((IStatusCodeHttpResult)result).StatusCode);
+    }
 
     private static HttpContext Context(string authorization)
     {

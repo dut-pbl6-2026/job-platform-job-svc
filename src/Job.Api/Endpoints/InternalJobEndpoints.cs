@@ -8,11 +8,14 @@ namespace Job.Api.Endpoints;
 /// <summary>
 /// Service-to-service job lookup for app-svc (recruiter ownership checks and application intake).
 /// Returns the job regardless of status, including Pending and Rejected jobs that public queries hide.
-/// Not exposed through the gateway: callers must present <c>Authorization: Bearer &lt;INTERNAL_SERVICE_TOKEN&gt;</c>.
+/// Not exposed through the gateway: callers must present <c>Authorization: Bearer &lt;JOB_INTERNAL_TOKEN_FOR_APP&gt;</c> (app-svc is the only caller).
 /// Fails closed: an unconfigured or wrong token gets 401.
 /// </summary>
 public static class InternalJobEndpoints
 {
+    /// <summary>Configuration/env key holding the token app-svc presents on this endpoint.</summary>
+    public const string AppCallerTokenKey = "JOB_INTERNAL_TOKEN_FOR_APP";
+
     public static WebApplication MapInternalJobEndpoints(this WebApplication app)
     {
         app.MapGet("/api/internal/jobs/{id:guid}", GetJobAsync)
@@ -33,7 +36,7 @@ public static class InternalJobEndpoints
         IConfiguration config,
         CancellationToken ct = default)
     {
-        var expected = config[InternalStatsEndpoints.TokenConfigKey];
+        var expected = config[AppCallerTokenKey];
         if (string.IsNullOrWhiteSpace(expected) ||
             !InternalStatsEndpoints.IsAuthorized(ctx.Request.Headers.Authorization.ToString(), expected))
         {

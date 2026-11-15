@@ -26,11 +26,29 @@ public sealed class InternalJobEndpointTests : IDisposable
         _db = new JobDbContext(options);
         _db.Database.EnsureCreated();
         _config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { [InternalStatsEndpoints.TokenConfigKey] = Token })
+            .AddInMemoryCollection(new Dictionary<string, string?> { [InternalJobEndpoints.AppCallerTokenKey] = Token })
             .Build();
     }
 
     public void Dispose() => _db.Dispose();
+
+    [Fact]
+    public async Task StatsCallerToken_IsRejected_EvenWhenConfigured()
+    {
+        // Only app-svc's token opens this endpoint; the token issued to auth-svc must not.
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [InternalJobEndpoints.AppCallerTokenKey] = Token,
+                [InternalStatsEndpoints.AuthCallerTokenKey] = "test-auth-caller-token",
+            })
+            .Build();
+
+        var result = await InternalJobEndpoints.GetJobAsync(
+            Guid.NewGuid(), Context("Bearer test-auth-caller-token"), _db, config);
+
+        Assert.Equal(401, ((IStatusCodeHttpResult)result).StatusCode);
+    }
 
     private static HttpContext Context(string? authorization)
     {
