@@ -1,4 +1,4 @@
-﻿﻿using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using System.Text;
 using Job.Core.Entities;
 using Job.Infrastructure.Data;
