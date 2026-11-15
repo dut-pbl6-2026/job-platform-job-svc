@@ -75,7 +75,7 @@ public static class InternalStatsEndpoints
             NewThisMonth: newThisMonth));
     }
 
-    private static bool IsAuthorized(string header, string expected)
+    internal static bool IsAuthorized(string header, string expected)
     {
         if (!header.StartsWith(BearerPrefix, StringComparison.OrdinalIgnoreCase))
         {
