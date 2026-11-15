@@ -26,8 +26,8 @@ public sealed class RecommendationOptions
     /// <summary>app-svc base URL for the backfill.</summary>
     public string? AppServiceUrl { get; set; }
 
-    /// <summary>Bearer token for app-svc internal endpoints.</summary>
-    public string? InternalServiceToken { get; set; }
+    /// <summary>Bearer token job-svc presents to app-svc (APP_INTERNAL_TOKEN_FOR_JOB).</summary>
+    public string? AppInternalToken { get; set; }
 
     /// <summary>Reads the env-style keys; unset values keep the default.</summary>
     public static void Bind(RecommendationOptions o, IConfiguration c)
@@ -38,7 +38,7 @@ public sealed class RecommendationOptions
         o.MinCooccurrence = Int(c, "RECOMMENDATION_MIN_COOCCURRENCE", o.MinCooccurrence);
         o.BackfillEnabled = bool.TryParse(c["RECOMMENDATION_BACKFILL_ENABLED"], out var enabled) && enabled;
         o.AppServiceUrl = Text(c, "APP_SERVICE_URL");
-        o.InternalServiceToken = Text(c, "INTERNAL_SERVICE_TOKEN");
+        o.AppInternalToken = Text(c, "APP_INTERNAL_TOKEN_FOR_JOB");
     }
 
     /// <summary>Returns the validation errors (empty when valid).</summary>

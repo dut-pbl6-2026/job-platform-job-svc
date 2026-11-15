@@ -1,4 +1,4 @@
-﻿using System.Security.Cryptography;
+﻿﻿using System.Security.Cryptography;
 using System.Text;
 using Job.Core.Entities;
 using Job.Infrastructure.Data;
@@ -10,12 +10,12 @@ namespace Job.Api.Endpoints;
 /// <summary>
 /// Service-to-service stats endpoint for the admin dashboard aggregation
 /// (feat(admin) Slice 6). Not exposed through the gateway: callers must present
-/// <c>Authorization: Bearer &lt;INTERNAL_SERVICE_TOKEN&gt;</c>.
+/// <c>Authorization: Bearer &lt;JOB_INTERNAL_TOKEN_FOR_AUTH&gt;</c> (auth-svc is the only caller).
 /// </summary>
 public static class InternalStatsEndpoints
 {
-    /// <summary>Configuration/env key holding the shared internal service token.</summary>
-    public const string TokenConfigKey = "INTERNAL_SERVICE_TOKEN";
+    /// <summary>Configuration/env key holding the token auth-svc presents on this endpoint.</summary>
+    public const string AuthCallerTokenKey = "JOB_INTERNAL_TOKEN_FOR_AUTH";
 
     private const string BearerPrefix = "Bearer ";
 
@@ -35,14 +35,14 @@ public static class InternalStatsEndpoints
         CancellationToken ct = default)
     {
         var logger = loggerFactory.CreateLogger("InternalStatsEndpoints");
-        var expected = config[TokenConfigKey];
+        var expected = config[AuthCallerTokenKey];
         if (string.IsNullOrWhiteSpace(expected))
         {
             // Fail closed: an unconfigured token must never turn the endpoint public.
             // Return 401 (not 503) — "misconfigured" is an auth failure, not a service outage.
             logger.LogError(
                 "{TokenKey} is not configured. Returning 401 to avoid exposing the endpoint.",
-                TokenConfigKey);
+                AuthCallerTokenKey);
             return Results.Json(new { message = "Unauthorized" }, statusCode: 401);
         }
 

@@ -136,7 +136,9 @@ docker run -p 5002:5002 --env-file .env job
 | `RECOMMENDATION_MIN_COOCCURRENCE` | 1 | |
 | `RECOMMENDATION_BACKFILL_ENABLED` | false | compose turns it on |
 | `APP_SERVICE_URL` | — | required when backfill is on |
-| `INTERNAL_SERVICE_TOKEN` | — | bearer token for app-svc |
+| `JOB_INTERNAL_TOKEN_FOR_APP` | — | bearer token app-svc presents on `/api/internal/jobs/{id}`; required outside Development |
+| `JOB_INTERNAL_TOKEN_FOR_AUTH` | — | bearer token auth-svc presents on `/api/internal/stats`; required outside Development |
+| `APP_INTERNAL_TOKEN_FOR_JOB` | — | bearer token job-svc presents to app-svc `/api/internal/applications` (backfill) |
 | `KAFKA_TOPIC_APPLICATION_EVENTS` | `application-events` | |
 | `KAFKA_GROUP_JOB_RECOMMENDER` | `job-svc-recommender` | never the shared `KAFKA_GROUP_ID` |
 

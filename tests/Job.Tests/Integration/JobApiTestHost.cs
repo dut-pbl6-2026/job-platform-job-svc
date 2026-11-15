@@ -25,7 +25,10 @@ namespace Job.Tests.Integration;
 /// </summary>
 internal sealed class JobApiTestHost : IAsyncDisposable
 {
+    /// <summary>Token app-svc presents on <c>/api/internal/jobs/{id}</c> (JOB_INTERNAL_TOKEN_FOR_APP).</summary>
     public const string InternalToken = "test-internal-token";
+    /// <summary>Token auth-svc presents on <c>/api/internal/stats</c> (JOB_INTERNAL_TOKEN_FOR_AUTH).</summary>
+    public const string AuthInternalToken = "test-auth-internal-token";
 
     private readonly WebApplication _app;
 
@@ -43,7 +46,8 @@ internal sealed class JobApiTestHost : IAsyncDisposable
         builder.WebHost.UseTestServer();
         builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
         {
-            [InternalStatsEndpoints.TokenConfigKey] = InternalToken,
+            [InternalJobEndpoints.AppCallerTokenKey] = InternalToken,
+            [InternalStatsEndpoints.AuthCallerTokenKey] = AuthInternalToken,
         });
 
         // Captured once: AddDbContext rebuilds options per scope, so a Guid created inside the lambda

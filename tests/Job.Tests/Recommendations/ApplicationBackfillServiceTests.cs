@@ -206,7 +206,7 @@ public sealed class ApplicationBackfillServiceTests : IDisposable
         {
             BackfillEnabled = enabled,
             AppServiceUrl = url,
-            InternalServiceToken = token,
+            AppInternalToken = token,
         });
         var provider = new ServiceCollection()
             .AddDbContext<JobDbContext>(o => o.UseInMemoryDatabase(_dbName))

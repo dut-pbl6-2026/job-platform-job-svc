@@ -16,7 +16,7 @@ public sealed record BackfillReport(bool Completed, int Pages, int Inserted, int
 /// <summary>
 /// One-time startup backfill of <c>JobInteractions</c> from app-svc (PBL6-10): applications
 /// older than Kafka retention never reach the consumer. Runs only when
-/// RECOMMENDATION_BACKFILL_ENABLED=true and APP_SERVICE_URL + INTERNAL_SERVICE_TOKEN are set.
+/// RECOMMENDATION_BACKFILL_ENABLED=true and APP_SERVICE_URL + APP_INTERNAL_TOKEN_FOR_JOB are set.
 /// Offset paging is safe because app-svc orders by CreatedAt, Id and never deletes applications:
 /// new rows only append. Duplicates are absorbed by the unique index. Never fails startup.
 /// </summary>
@@ -67,10 +67,10 @@ public sealed class ApplicationBackfillService : BackgroundService
             return new BackfillReport(false, 0, 0, 0);
         }
 
-        if (_options.AppServiceUrl is null || string.IsNullOrWhiteSpace(_options.InternalServiceToken))
+        if (_options.AppServiceUrl is null || string.IsNullOrWhiteSpace(_options.AppInternalToken))
         {
             _logger.LogWarning(
-                "Recommendation backfill enabled but APP_SERVICE_URL or INTERNAL_SERVICE_TOKEN is not set. Skipping.");
+                "Recommendation backfill enabled but APP_SERVICE_URL or APP_INTERNAL_TOKEN_FOR_JOB is not set. Skipping.");
             return new BackfillReport(false, 0, 0, 0);
         }
 

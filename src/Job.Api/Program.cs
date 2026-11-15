@@ -131,6 +131,16 @@ if (!string.IsNullOrWhiteSpace(kafkaServers))
     builder.Services.AddHostedService<ApplicationInteractionsConsumer>();
 }
 
+// Per-caller tokens: job-svc accepts only the token issued to app-svc (/api/internal/jobs/{id}) and
+// to auth-svc (/api/internal/stats). Outside Development a missing value fails startup.
+if (!builder.Environment.IsDevelopment() &&
+    (string.IsNullOrWhiteSpace(builder.Configuration[InternalJobEndpoints.AppCallerTokenKey]) ||
+     string.IsNullOrWhiteSpace(builder.Configuration[InternalStatsEndpoints.AuthCallerTokenKey])))
+{
+    throw new InvalidOperationException(
+        "JOB_INTERNAL_TOKEN_FOR_APP and JOB_INTERNAL_TOKEN_FOR_AUTH are required outside Development");
+}
+
 // One-time startup backfill from app-svc; no-op unless RECOMMENDATION_BACKFILL_ENABLED=true.
 builder.Services.AddHttpClient<AppServiceClient>(client => client.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddHostedService<ApplicationBackfillService>();

@@ -52,7 +52,7 @@ public sealed class AppServiceClient
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
             $"{baseUrl}/api/internal/applications?page={page.ToString(CultureInfo.InvariantCulture)}&size={size.ToString(CultureInfo.InvariantCulture)}");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _options.InternalServiceToken);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _options.AppInternalToken);
 
         HttpResponseMessage response;
         try
