@@ -4,7 +4,7 @@ Job service for **Vietnam Job Platform** (`pbl6`) — `dut-pbl6-2026`. `Job CRUD
 
 ## Overview
 
-- `src/Job.Api` — Web API `Swagger` `health` `auto-migrate`
+- `src/Job.Api` — Web API `Swagger` `health` `migrate` command
 - `src/Job.Core` — Domain (`Job` `Category` `Company` `SavedJob` `: Entity`)
 - `src/Job.Infrastructure` — `JobDbContext` `Npgsql` `Migrations` `SeedData`
 - `tests` — `xunit` entity tests
@@ -66,7 +66,7 @@ curl -X POST http://localhost:5002/api/jobs \
   -d '{"title":"Backend Developer","description":"Build and maintain APIs","companyId":"<uuid>","location":"Da Nang","categoryId":"7d09cd31-5580-41a2-948e-00bfbfdc8e3b"}'
 ```
 
-`auto-migrate` on startup, `UseExceptionHandler` + `ILogger`.
+`UseExceptionHandler` + `ILogger`. The host does not migrate or seed on startup: run `dotnet run --project src/Job.Api -- migrate` first (compose service `job-migrate`).
 
 ## Docker
 
