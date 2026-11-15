@@ -27,9 +27,7 @@ public sealed class RecommendationMetricsTests
         var dbName = "RecommendationMetrics_" + Guid.NewGuid();
         builder.Services.AddDbContext<JobDbContext>(o => o.UseInMemoryDatabase(dbName));
         builder.Services.AddProblemDetails();
-        builder.Services.AddHttpClient<SearchSyncPublisher>();
         builder.Services.AddSingleton<IKafkaProducer, NoOpKafkaProducer>();
-        builder.Services.AddSingleton<KafkaJobEventPublisher>();
         builder.Services.AddRecommendations();
         builder.Services.AddOpenTelemetry().WithMetrics(m => m
             .AddMeter(RecommendationMetrics.MeterName)

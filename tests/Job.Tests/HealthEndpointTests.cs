@@ -56,7 +56,6 @@ public sealed class HealthEndpointTests
         using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
         Assert.Equal("unhealthy", doc.RootElement.GetProperty("status").GetString());
         Assert.Equal("unhealthy", doc.RootElement.GetProperty("checks").GetProperty("postgres").GetProperty("status").GetString());
-        Assert.Equal("healthy", doc.RootElement.GetProperty("checks").GetProperty("kafka").GetProperty("status").GetString());
     }
 
     [Fact]
@@ -64,7 +63,6 @@ public sealed class HealthEndpointTests
     {
         await using var app = await StartAsync(s =>
         {
-            s.AddSingleton<IOptions<KafkaOptions>>(Options.Create(new KafkaOptions { BootstrapServers = "" }));
             s.AddDbContext<JobDbContext>(o => o.UseInMemoryDatabase(Guid.NewGuid().ToString()));
         });
         var res = await app.GetTestClient().GetAsync("/health/ready");
@@ -72,15 +70,6 @@ public sealed class HealthEndpointTests
         Assert.Equal(System.Net.HttpStatusCode.OK, res.StatusCode);
         using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
         Assert.Equal("healthy", doc.RootElement.GetProperty("status").GetString());
-    }
-
-    [Fact]
-    public async Task KafkaCheck_NotConfigured_IsHealthy()
-    {
-        var check = new KafkaStateHealthCheck(
-            Options.Create(new KafkaOptions { BootstrapServers = "" }), new ServiceCollection().BuildServiceProvider());
-        var result = await check.CheckHealthAsync(new HealthCheckContext());
-        Assert.Equal(HealthStatus.Healthy, result.Status);
     }
 
     [Fact]

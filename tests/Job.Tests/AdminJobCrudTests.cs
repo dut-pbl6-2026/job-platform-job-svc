@@ -2,7 +2,6 @@ using System.Reflection;
 using System.Security.Claims;
 using Job.Api.DTOs;
 using Job.Api.Endpoints;
-using Job.Api.Services;
 using Job.Core.Entities;
 using Job.Infrastructure.Data;
 using Microsoft.AspNetCore.Http;
@@ -10,7 +9,6 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using SharedKernel.Events;
-using SharedKernel.Kafka;
 using JobPosting = Job.Core.Entities.Job;
 
 namespace Job.Tests;
@@ -21,9 +19,6 @@ public sealed class AdminJobCrudTests : IDisposable
     private readonly JobDbContext _db;
     private readonly Guid _companyId = Guid.NewGuid();
     private readonly Guid _adminId = Guid.NewGuid();
-    private readonly RecordingProducer _producer = new();
-    private readonly HttpClient _http = new();
-    private readonly KafkaJobEventPublisher _kafka;
 
     public AdminJobCrudTests()
     {
@@ -35,32 +30,25 @@ public sealed class AdminJobCrudTests : IDisposable
         typeof(Company).GetProperty(nameof(Company.Id))!.SetValue(company, _companyId);
         _db.Companies.Add(company);
         _db.SaveChanges();
-
-        var configuration = new ConfigurationBuilder().Build();
-        var searchSync = new SearchSyncPublisher(_http, configuration, NullLogger<SearchSyncPublisher>.Instance);
-        _kafka = new KafkaJobEventPublisher(
-            _producer, searchSync, NullLogger<KafkaJobEventPublisher>.Instance, configuration);
     }
 
     public void Dispose()
     {
-        _kafka.Dispose();
-        _http.Dispose();
         _db.Dispose();
     }
 
     // ── POST ──────────────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task CreateJob_Admin_CreatesActiveJobPostedByAdminAndPublishesCreated()
+    public async Task CreateJob_Admin_CreatesActiveJobPostedByAdminAndQueuesCreatedEvent()
     {
-        var result = await Invoke("CreateJob", CreateDto(), _db, Ctx("Admin"), _kafka, NullLoggerFactory.Instance, CancellationToken.None);
+        var result = await Invoke("CreateJob", CreateDto(), _db, Ctx("Admin"), NullLoggerFactory.Instance, CancellationToken.None);
 
         Assert.Equal(201, Status(result));
         var job = await _db.Jobs.IgnoreQueryFilters().SingleAsync();
         Assert.Equal(JobStatus.Active, job.Status);
         Assert.Equal(_adminId, job.RecruiterId);
-        Assert.Equal([JobEventTypes.Created], _producer.EventTypes);
+        Assert.Equal([JobEventTypes.Created], await OutboxEventTypesAsync());
     }
 
     [Fact]
@@ -68,17 +56,17 @@ public sealed class AdminJobCrudTests : IDisposable
     {
         var dto = CreateDto() with { CompanyId = Guid.NewGuid() };
 
-        var result = await Invoke("CreateJob", dto, _db, Ctx("Admin"), _kafka, NullLoggerFactory.Instance, CancellationToken.None);
+        var result = await Invoke("CreateJob", dto, _db, Ctx("Admin"), NullLoggerFactory.Instance, CancellationToken.None);
 
         Assert.Equal(400, Status(result));
         Assert.Empty(await _db.Jobs.IgnoreQueryFilters().ToListAsync());
-        Assert.Empty(_producer.EventTypes);
+        Assert.Empty(await OutboxEventTypesAsync());
     }
 
     [Fact]
     public async Task CreateJob_MissingTitle_Returns400()
     {
-        var result = await Invoke("CreateJob", CreateDto() with { Title = " " }, _db, Ctx("Admin"), _kafka, NullLoggerFactory.Instance, CancellationToken.None);
+        var result = await Invoke("CreateJob", CreateDto() with { Title = " " }, _db, Ctx("Admin"), NullLoggerFactory.Instance, CancellationToken.None);
 
         Assert.Equal(400, Status(result));
     }
@@ -86,7 +74,7 @@ public sealed class AdminJobCrudTests : IDisposable
     [Fact]
     public async Task CreateJob_Recruiter_ReturnsForbidden()
     {
-        var result = await Invoke("CreateJob", CreateDto(), _db, Ctx("Recruiter"), _kafka, NullLoggerFactory.Instance, CancellationToken.None);
+        var result = await Invoke("CreateJob", CreateDto(), _db, Ctx("Recruiter"), NullLoggerFactory.Instance, CancellationToken.None);
 
         Assert.Equal(403, Status(result));
     }
@@ -99,13 +87,13 @@ public sealed class AdminJobCrudTests : IDisposable
         var job = await SeedJob(JobStatus.Pending);
         var dto = UpdateDto("Senior Backend Developer");
 
-        var result = await Invoke("UpdateJob", job.Id, dto, _db, Ctx("Admin"), _kafka, NullLoggerFactory.Instance, CancellationToken.None);
+        var result = await Invoke("UpdateJob", job.Id, dto, _db, Ctx("Admin"), NullLoggerFactory.Instance, CancellationToken.None);
 
         Assert.Equal(200, Status(result));
         Assert.Equal("Senior Backend Developer", job.Title);
         Assert.Equal(JobStatus.Pending, job.Status);
-        Assert.Equal([JobEventTypes.Updated], _producer.EventTypes);
-        Assert.Equal("Pending", Assert.IsType<JobUpdatedEvent>(_producer.Payloads.Single()).Status);
+        Assert.Equal([JobEventTypes.Updated], await OutboxEventTypesAsync());
+        Assert.Contains("\"status\":\"Pending\"", (await _db.OutboxEvents.SingleAsync()).Payload);
     }
 
     [Fact]
@@ -113,16 +101,16 @@ public sealed class AdminJobCrudTests : IDisposable
     {
         var job = await SeedJob(JobStatus.Deleted);
 
-        var result = await Invoke("UpdateJob", job.Id, UpdateDto("x"), _db, Ctx("Admin"), _kafka, NullLoggerFactory.Instance, CancellationToken.None);
+        var result = await Invoke("UpdateJob", job.Id, UpdateDto("x"), _db, Ctx("Admin"), NullLoggerFactory.Instance, CancellationToken.None);
 
         Assert.Equal(409, Status(result));
-        Assert.Empty(_producer.EventTypes);
+        Assert.Empty(await OutboxEventTypesAsync());
     }
 
     [Fact]
     public async Task UpdateJob_UnknownJob_Returns404()
     {
-        var result = await Invoke("UpdateJob", Guid.NewGuid(), UpdateDto("x"), _db, Ctx("Admin"), _kafka, NullLoggerFactory.Instance, CancellationToken.None);
+        var result = await Invoke("UpdateJob", Guid.NewGuid(), UpdateDto("x"), _db, Ctx("Admin"), NullLoggerFactory.Instance, CancellationToken.None);
 
         Assert.Equal(404, Status(result));
     }
@@ -134,11 +122,11 @@ public sealed class AdminJobCrudTests : IDisposable
     {
         var job = await SeedJob(JobStatus.Active);
 
-        var result = await Invoke("SoftDeleteJob", job.Id, _db, Ctx("Admin"), _kafka, NullLoggerFactory.Instance, CancellationToken.None);
+        var result = await Invoke("SoftDeleteJob", job.Id, _db, Ctx("Admin"), NullLoggerFactory.Instance, CancellationToken.None);
 
         Assert.Equal(204, Status(result));
         Assert.Equal(JobStatus.Deleted, job.Status);
-        Assert.Equal([JobEventTypes.Deleted], _producer.EventTypes);
+        Assert.Equal([JobEventTypes.Deleted], await OutboxEventTypesAsync());
     }
 
     [Fact]
@@ -146,10 +134,10 @@ public sealed class AdminJobCrudTests : IDisposable
     {
         var job = await SeedJob(JobStatus.Deleted);
 
-        var result = await Invoke("SoftDeleteJob", job.Id, _db, Ctx("Admin"), _kafka, NullLoggerFactory.Instance, CancellationToken.None);
+        var result = await Invoke("SoftDeleteJob", job.Id, _db, Ctx("Admin"), NullLoggerFactory.Instance, CancellationToken.None);
 
         Assert.Equal(204, Status(result));
-        Assert.Equal([JobEventTypes.Deleted], _producer.EventTypes);
+        Assert.Equal([JobEventTypes.Deleted], await OutboxEventTypesAsync());
     }
 
     [Fact]
@@ -157,7 +145,7 @@ public sealed class AdminJobCrudTests : IDisposable
     {
         var job = await SeedJob(JobStatus.Active);
 
-        var result = await Invoke("SoftDeleteJob", job.Id, _db, Ctx("Recruiter"), _kafka, NullLoggerFactory.Instance, CancellationToken.None);
+        var result = await Invoke("SoftDeleteJob", job.Id, _db, Ctx("Recruiter"), NullLoggerFactory.Instance, CancellationToken.None);
 
         Assert.Equal(403, Status(result));
         Assert.Equal(JobStatus.Active, job.Status);
@@ -172,12 +160,12 @@ public sealed class AdminJobCrudTests : IDisposable
         _db.SavedJobs.Add(new SavedJob(Guid.NewGuid(), job.Id));
         await _db.SaveChangesAsync();
 
-        var result = await Invoke("HardDeleteJob", job.Id, _db, Ctx("Admin"), _kafka, NullLoggerFactory.Instance, CancellationToken.None);
+        var result = await Invoke("HardDeleteJob", job.Id, _db, Ctx("Admin"), NullLoggerFactory.Instance, CancellationToken.None);
 
         Assert.Equal(204, Status(result));
         Assert.False(await _db.Jobs.IgnoreQueryFilters().AnyAsync(j => j.Id == job.Id));
         Assert.Empty(await _db.SavedJobs.ToListAsync());
-        Assert.Equal([JobEventTypes.Deleted], _producer.EventTypes);
+        Assert.Equal([JobEventTypes.Deleted], await OutboxEventTypesAsync());
     }
 
     [Theory]
@@ -189,17 +177,17 @@ public sealed class AdminJobCrudTests : IDisposable
     {
         var job = await SeedJob(status);
 
-        var result = await Invoke("HardDeleteJob", job.Id, _db, Ctx("Admin"), _kafka, NullLoggerFactory.Instance, CancellationToken.None);
+        var result = await Invoke("HardDeleteJob", job.Id, _db, Ctx("Admin"), NullLoggerFactory.Instance, CancellationToken.None);
 
         Assert.Equal(409, Status(result));
         Assert.True(await _db.Jobs.IgnoreQueryFilters().AnyAsync(j => j.Id == job.Id));
-        Assert.Empty(_producer.EventTypes);
+        Assert.Empty(await OutboxEventTypesAsync());
     }
 
     [Fact]
     public async Task HardDeleteJob_UnknownJob_Returns404()
     {
-        var result = await Invoke("HardDeleteJob", Guid.NewGuid(), _db, Ctx("Admin"), _kafka, NullLoggerFactory.Instance, CancellationToken.None);
+        var result = await Invoke("HardDeleteJob", Guid.NewGuid(), _db, Ctx("Admin"), NullLoggerFactory.Instance, CancellationToken.None);
 
         Assert.Equal(404, Status(result));
     }
@@ -209,7 +197,7 @@ public sealed class AdminJobCrudTests : IDisposable
     {
         var job = await SeedJob(JobStatus.Deleted);
 
-        var result = await Invoke("HardDeleteJob", job.Id, _db, Ctx("Recruiter"), _kafka, NullLoggerFactory.Instance, CancellationToken.None);
+        var result = await Invoke("HardDeleteJob", job.Id, _db, Ctx("Recruiter"), NullLoggerFactory.Instance, CancellationToken.None);
 
         Assert.Equal(403, Status(result));
         Assert.True(await _db.Jobs.IgnoreQueryFilters().AnyAsync(j => j.Id == job.Id));
@@ -247,27 +235,12 @@ public sealed class AdminJobCrudTests : IDisposable
     private static int? Status(IResult result) =>
         Assert.IsAssignableFrom<IStatusCodeHttpResult>(result).StatusCode;
 
+    private async Task<List<string>> OutboxEventTypesAsync() =>
+        await _db.OutboxEvents.OrderBy(e => e.CreatedAt).Select(e => e.EventType).ToListAsync();
+
     private static async Task<IResult> Invoke(string name, params object?[] args)
     {
         var method = typeof(AdminJobEndpoints).GetMethod(name, BindingFlags.NonPublic | BindingFlags.Static)!;
         return await (Task<IResult>)method.Invoke(null, args)!;
-    }
-
-    private sealed class RecordingProducer : IKafkaProducer
-    {
-        public List<string> EventTypes { get; } = [];
-        public List<object?> Payloads { get; } = [];
-
-        public Task ProduceAsync<T>(
-            string topic, string key, EventEnvelope<T> envelope, CancellationToken ct = default)
-        {
-            EventTypes.Add(envelope.EventType);
-            Payloads.Add(envelope.Payload);
-            return Task.CompletedTask;
-        }
-
-        public void Dispose()
-        {
-        }
     }
 }

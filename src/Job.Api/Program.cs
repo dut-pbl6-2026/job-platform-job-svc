@@ -89,15 +89,8 @@ builder.Services.AddOpenTelemetry()
 // REL-07: ProblemDetails for RFC 7807 error responses (7-eir.md:7.7.1)
 builder.Services.AddProblemDetails();
 
-// PBL6-19: search sync publisher (direct HTTP to search-svc; disabled when SEARCH_SYNC_URL unset).
-// Also used as HTTP fallback when Kafka circuit-breaker is open (plan 2.3).
-builder.Services.AddHttpClient<SearchSyncPublisher>(client =>
-{
-    client.Timeout = TimeSpan.FromSeconds(5);
-});
-
-// PBL6-5: Kafka event publishing (job.created/updated/deleted -> job-events topic).
-// KafkaOptions binds KAFKA_BOOTSTRAP_SERVERS env var; empty = Kafka disabled (HTTP-only sync).
+// PBL6-5: Kafka event publishing (job.created/updated/deleted -> job-events topic), sent by
+// OutboxPublisherService. KafkaOptions binds KAFKA_BOOTSTRAP_SERVERS env var; empty = Kafka disabled.
 builder.Services.Configure<KafkaOptions>(o =>
 {
     o.BootstrapServers = builder.Configuration["KAFKA_BOOTSTRAP_SERVERS"]
@@ -118,13 +111,11 @@ if (!string.IsNullOrWhiteSpace(kafkaServers))
 }
 else
 {
-    // Kafka not configured: register a no-op producer. Publisher will always HTTP-fallback.
+    // Kafka not configured: register a no-op producer that fails every publish, so outbox rows stay
+    // queued (and are logged at Error) until Kafka is configured.
     builder.Services.AddSingleton<IKafkaProducer, NoOpKafkaProducer>();
 }
 
-// Singleton: circuit-breaker state must persist across requests (plan v3.1).
-builder.Services.AddSingleton<KafkaJobEventPublisher>();
-builder.Services.AddHostedService<KafkaHealthCheckService>();
 builder.Services.AddHostedService<OutboxPublisherService>();
 
 // PBL6-10: recommendation read model. The consumer runs only when Kafka is configured.
@@ -199,20 +190,11 @@ app.MapAdminJobEndpoints();
 app.MapInternalStatsEndpoints();
 app.MapInternalJobEndpoints();
 
-// PBL6-19 (S-2): surface search-sync wiring once at startup — a missing
-// SEARCH_SYNC_URL silently disables indexing, which must never go unnoticed.
-if (string.IsNullOrWhiteSpace(app.Configuration["SEARCH_SYNC_URL"] ?? app.Configuration["SearchSync:Url"]))
-{
-    app.Logger.LogWarning("SEARCH_SYNC_URL is not set. Search index sync is DISABLED — jobs will not appear in search results.");
-}
-
-// PBL6-5: Kafka sync status at startup
+// PBL6-5: Kafka status at startup. Job events wait in the outbox until Kafka is configured.
 if (string.IsNullOrWhiteSpace(kafkaServers))
 {
     app.Logger.LogWarning(
-        "KAFKA_BOOTSTRAP_SERVERS is not set. Kafka publishing is DISABLED — using HTTP sync only.");
-    app.Logger.LogWarning(
-        "Outbox events (admin approve/reject) cannot be published without Kafka and will exhaust retries.");
+        "KAFKA_BOOTSTRAP_SERVERS is not set. Job events stay in the outbox (unpublished) until Kafka is configured.");
 }
 else
 {

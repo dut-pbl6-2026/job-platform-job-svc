@@ -112,7 +112,7 @@ public class JobDbContext : DbContext
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
-        // feat(admin): OutboxEvent table — transactional outbox pattern (Slice 3/4)
+        // OutboxEvent table — transactional outbox pattern for every job event
         b.Entity<OutboxEvent>(e =>
         {
             e.HasKey(x => x.Id);
@@ -122,6 +122,9 @@ public class JobDbContext : DbContext
             e.Property(x => x.IsPublished).HasDefaultValue(false);
             // Index for the publisher poll: WHERE IsPublished = false ORDER BY CreatedAt
             e.HasIndex(x => new { x.IsPublished, x.CreatedAt });
+            // Partial index for the per-job ordering check (earlier unpublished row of the same AggregateId).
+            e.HasIndex(x => new { x.AggregateId, x.CreatedAt })
+                .HasFilter("NOT \"IsPublished\"");
         });
 
         // PBL6-10: no FK to Jobs on purpose — rows come from another service's events and
