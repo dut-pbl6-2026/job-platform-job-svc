@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Security.Claims;
+using Job.Api.Auth;
 using Job.Api.DTOs;
 using Job.Api.Endpoints;
 using Job.Core.Entities;
@@ -104,6 +105,79 @@ public sealed class JobCompanyOwnershipTests : IDisposable
         Assert.Empty(await _db.OutboxEvents.ToListAsync());
     }
 
+    // ─── Company membership via the company_id claim (AUTH-01-09) ───────────
+
+    [Fact]
+    public async Task CreateJob_ByInvitedRecruiterWithMatchingCompanyClaim_Returns201()
+    {
+        var result = await Invoke("CreateJob", CreateDto(_ownCompanyId), _db,
+            Ctx(_otherRecruiterId, _ownCompanyId), _configuration, CancellationToken.None);
+
+        Assert.Equal(201, Status(result));
+        var job = await _db.Jobs.IgnoreQueryFilters().SingleAsync();
+        Assert.Equal(_ownCompanyId, job.CompanyId);
+        Assert.Equal(_otherRecruiterId, job.RecruiterId);
+    }
+
+    [Fact]
+    public async Task CreateJob_ByRecruiterWithOtherCompanyClaim_Returns403AndSavesNothing()
+    {
+        var result = await Invoke("CreateJob", CreateDto(_ownCompanyId), _db,
+            Ctx(_otherRecruiterId, _otherCompanyId), _configuration, CancellationToken.None);
+
+        Assert.Equal(403, Status(result));
+        Assert.Empty(await _db.Jobs.IgnoreQueryFilters().ToListAsync());
+    }
+
+    [Fact]
+    public async Task CreateJob_ByNonCreatorWithoutCompanyClaim_Returns403AndSavesNothing()
+    {
+        var result = await Invoke("CreateJob", CreateDto(_ownCompanyId), _db,
+            Ctx(_otherRecruiterId), _configuration, CancellationToken.None);
+
+        Assert.Equal(403, Status(result));
+        Assert.Empty(await _db.Jobs.IgnoreQueryFilters().ToListAsync());
+    }
+
+    [Fact]
+    public async Task UpdateJob_ByJobOwnerWithMatchingCompanyClaim_Returns200()
+    {
+        var job = await SeedJob(_ownCompanyId);
+
+        var result = await Invoke("UpdateJob", job.Id, UpdateDto(_secondOwnCompanyId), _db,
+            Ctx(_recruiterId, _secondOwnCompanyId), CancellationToken.None);
+
+        Assert.Equal(200, Status(result));
+        var reloaded = await _db.Jobs.IgnoreQueryFilters().SingleAsync();
+        Assert.Equal(_secondOwnCompanyId, reloaded.CompanyId);
+    }
+
+    [Fact]
+    public async Task UpdateJob_ByJobOwnerWithDifferentCompanyClaim_Returns403AndKeepsCompany()
+    {
+        var job = await SeedJob(_ownCompanyId);
+
+        var result = await Invoke("UpdateJob", job.Id, UpdateDto(_ownCompanyId), _db,
+            Ctx(_recruiterId, _otherCompanyId), CancellationToken.None);
+
+        Assert.Equal(403, Status(result));
+        var reloaded = await _db.Jobs.IgnoreQueryFilters().SingleAsync();
+        Assert.Equal(_ownCompanyId, reloaded.CompanyId);
+    }
+
+    [Fact]
+    public async Task UpdateJob_ByCompanyRecruiterWhoDoesNotOwnJob_Returns403()
+    {
+        var job = await SeedJob(_ownCompanyId);
+
+        var result = await Invoke("UpdateJob", job.Id, UpdateDto(_ownCompanyId), _db,
+            Ctx(_otherRecruiterId, _ownCompanyId), CancellationToken.None);
+
+        Assert.Equal(403, Status(result));
+        var reloaded = await _db.Jobs.IgnoreQueryFilters().SingleAsync();
+        Assert.Equal("Backend Developer", reloaded.Title);
+    }
+
     [Fact]
     public async Task UpdateJob_UnknownId_Returns404()
     {
@@ -170,15 +244,20 @@ public sealed class JobCompanyOwnershipTests : IDisposable
         new("Backend Developer", "Build APIs", companyId, "Da Nang",
             null, null, null, null, null, null, null, null);
 
-    private static HttpContext Ctx(Guid userId) =>
-        new DefaultHttpContext
+    private static HttpContext Ctx(Guid userId, Guid? companyId = null)
+    {
+        var claims = new List<Claim>
         {
-            User = new ClaimsPrincipal(new ClaimsIdentity(
-            [
-                new Claim(ClaimTypes.NameIdentifier, userId.ToString()),
-                new Claim(ClaimTypes.Role, "Recruiter")
-            ], "Test"))
+            new(ClaimTypes.NameIdentifier, userId.ToString()),
+            new(ClaimTypes.Role, "Recruiter")
         };
+        if (companyId is not null)
+            claims.Add(new Claim(IdentityHelper.CompanyIdClaimType, companyId.Value.ToString()));
+        return new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity(claims, "Test"))
+        };
+    }
 
     private static int? Status(IResult result) =>
         Assert.IsAssignableFrom<IStatusCodeHttpResult>(result).StatusCode;

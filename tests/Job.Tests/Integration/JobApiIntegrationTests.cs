@@ -118,6 +118,68 @@ public class JobApiIntegrationTests
     }
 
     [Fact]
+    public async Task CreateJob_ByInvitedRecruiterWithMatchingCompanyClaim_Returns201()
+    {
+        await using var host = await JobApiTestHost.StartAsync();
+        var companyId = await host.CreateCompanyAsync(OwnerRecruiter, "Own Corp");
+
+        using var response = await host.SendAsync(HttpMethod.Post, "/api/jobs", OtherRecruiter, "Recruiter",
+            JobBody(companyId), companyId);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var jobId = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+        var job = await host.LoadJobAsync(jobId);
+        Assert.Equal(OtherRecruiter, job!.RecruiterId);
+        Assert.Equal(companyId, job.CompanyId);
+    }
+
+    [Fact]
+    public async Task CreateJob_ByRecruiterWithOtherCompanyClaim_Returns403WithCode()
+    {
+        await using var host = await JobApiTestHost.StartAsync();
+        var targetCompanyId = await host.CreateCompanyAsync(OwnerRecruiter, "Own Corp");
+        var ownCompanyId = await host.CreateCompanyAsync(OtherRecruiter, "Other Corp");
+
+        using var response = await host.SendAsync(HttpMethod.Post, "/api/jobs", OtherRecruiter, "Recruiter",
+            JobBody(targetCompanyId), ownCompanyId);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("not_company_member", json.GetProperty("code").GetString());
+        var listed = await host.SendAsync(HttpMethod.Get, "/api/jobs/recruiter", OtherRecruiter, "Recruiter");
+        Assert.Equal(0, (await listed.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("total").GetInt32());
+    }
+
+    [Fact]
+    public async Task UpdateJob_ByCompanyRecruiterWhoDoesNotOwnJob_Returns403()
+    {
+        await using var host = await JobApiTestHost.StartAsync();
+        var companyId = await host.CreateCompanyAsync(OwnerRecruiter, "Own Corp");
+        var jobId = await CreateJobAsync(host, OwnerRecruiter, companyId);
+
+        using var response = await host.SendAsync(HttpMethod.Put, $"/api/jobs/{jobId}", OtherRecruiter, "Recruiter",
+            JobBody(companyId, "Hijacked"), companyId);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal("Backend Developer", (await host.LoadJobAsync(jobId))!.Title);
+    }
+
+    [Fact]
+    public async Task UpdateJob_ByOwnerWithDifferentCompanyClaim_Returns403()
+    {
+        await using var host = await JobApiTestHost.StartAsync();
+        var companyId = await host.CreateCompanyAsync(OwnerRecruiter, "Own Corp");
+        var otherCompanyId = await host.CreateCompanyAsync(OtherRecruiter, "Other Corp");
+        var jobId = await CreateJobAsync(host, OwnerRecruiter, companyId);
+
+        using var response = await host.SendAsync(HttpMethod.Put, $"/api/jobs/{jobId}", OwnerRecruiter, "Recruiter",
+            JobBody(companyId, "Hijacked"), otherCompanyId);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal("Backend Developer", (await host.LoadJobAsync(jobId))!.Title);
+    }
+
+    [Fact]
     public async Task UpdateJob_MoveToCompanyOwnedByAnotherRecruiter_Returns403AndKeepsCompany()
     {
         await using var host = await JobApiTestHost.StartAsync();
