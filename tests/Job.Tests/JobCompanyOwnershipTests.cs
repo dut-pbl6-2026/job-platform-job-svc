@@ -22,8 +22,6 @@ public sealed class JobCompanyOwnershipTests : IDisposable
     private readonly Guid _ownCompanyId = Guid.NewGuid();
     private readonly Guid _otherCompanyId = Guid.NewGuid();
     private readonly Guid _secondOwnCompanyId = Guid.NewGuid();
-    private readonly IConfiguration _configuration = new ConfigurationBuilder().Build();
-
     public JobCompanyOwnershipTests()
     {
         var options = new DbContextOptionsBuilder<JobDbContext>()
@@ -47,7 +45,7 @@ public sealed class JobCompanyOwnershipTests : IDisposable
     {
         var dto = CreateDto(_otherCompanyId);
 
-        var result = await Invoke("CreateJob", dto, _db, Ctx(_recruiterId), _configuration, CancellationToken.None);
+        var result = await Invoke("CreateJob", dto, _db, Ctx(_recruiterId), CancellationToken.None);
 
         Assert.Equal(403, Status(result));
         Assert.Empty(await _db.Jobs.IgnoreQueryFilters().ToListAsync());
@@ -58,7 +56,7 @@ public sealed class JobCompanyOwnershipTests : IDisposable
     {
         var dto = CreateDto(_ownCompanyId);
 
-        var result = await Invoke("CreateJob", dto, _db, Ctx(_recruiterId), _configuration, CancellationToken.None);
+        var result = await Invoke("CreateJob", dto, _db, Ctx(_recruiterId), CancellationToken.None);
 
         Assert.Equal(201, Status(result));
         var job = await _db.Jobs.IgnoreQueryFilters().SingleAsync();
@@ -111,7 +109,7 @@ public sealed class JobCompanyOwnershipTests : IDisposable
     public async Task CreateJob_ByInvitedRecruiterWithMatchingCompanyClaim_Returns201()
     {
         var result = await Invoke("CreateJob", CreateDto(_ownCompanyId), _db,
-            Ctx(_otherRecruiterId, _ownCompanyId), _configuration, CancellationToken.None);
+            Ctx(_otherRecruiterId, _ownCompanyId), CancellationToken.None);
 
         Assert.Equal(201, Status(result));
         var job = await _db.Jobs.IgnoreQueryFilters().SingleAsync();
@@ -123,7 +121,7 @@ public sealed class JobCompanyOwnershipTests : IDisposable
     public async Task CreateJob_ByRecruiterWithOtherCompanyClaim_Returns403AndSavesNothing()
     {
         var result = await Invoke("CreateJob", CreateDto(_ownCompanyId), _db,
-            Ctx(_otherRecruiterId, _otherCompanyId), _configuration, CancellationToken.None);
+            Ctx(_otherRecruiterId, _otherCompanyId), CancellationToken.None);
 
         Assert.Equal(403, Status(result));
         Assert.Empty(await _db.Jobs.IgnoreQueryFilters().ToListAsync());
@@ -133,7 +131,7 @@ public sealed class JobCompanyOwnershipTests : IDisposable
     public async Task CreateJob_ByNonCreatorWithoutCompanyClaim_Returns403AndSavesNothing()
     {
         var result = await Invoke("CreateJob", CreateDto(_ownCompanyId), _db,
-            Ctx(_otherRecruiterId), _configuration, CancellationToken.None);
+            Ctx(_otherRecruiterId), CancellationToken.None);
 
         Assert.Equal(403, Status(result));
         Assert.Empty(await _db.Jobs.IgnoreQueryFilters().ToListAsync());

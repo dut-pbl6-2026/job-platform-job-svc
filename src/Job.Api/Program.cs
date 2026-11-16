@@ -211,15 +211,6 @@ else
         kafkaServers);
 }
 
-// feat(admin): approval workflow is opt-in so existing recruiter flows stay Active by default.
-var adminApprovalEnabled =
-    bool.TryParse(app.Configuration["FEATURE_ADMIN_APPROVAL"], out var approvalFlag) && approvalFlag;
-app.Logger.LogInformation(
-    "Admin approval flow {State}.",
-    adminApprovalEnabled
-        ? "ENABLED — new recruiter jobs start as Pending"
-        : "DISABLED — new recruiter jobs start as Active");
-
 // Category endpoints (SRS JOB-01-06)
 app.MapCategoryEndpoints();
 

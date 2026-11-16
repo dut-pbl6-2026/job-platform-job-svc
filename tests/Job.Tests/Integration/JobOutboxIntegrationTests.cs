@@ -167,7 +167,7 @@ public class JobOutboxIntegrationTests
             ], "Test"))
         };
         var method = typeof(JobEndpoints).GetMethod("CreateJob", BindingFlags.NonPublic | BindingFlags.Static)!;
-        return (Task<IResult>)method.Invoke(null, [dto, db, ctx, new ConfigurationBuilder().Build(), CancellationToken.None])!;
+        return (Task<IResult>)method.Invoke(null, [dto, db, ctx, CancellationToken.None])!;
     }
 
     /// <summary>Counts SaveChanges calls and can fail the next one before anything is written.</summary>

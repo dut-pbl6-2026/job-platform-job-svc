@@ -68,6 +68,7 @@ internal sealed class JobApiTestHost : IAsyncDisposable
         app.UseMiddleware<DevAuthMiddleware>();
         app.MapJobEndpoints();
         app.MapInternalJobEndpoints();
+        app.MapAdminJobEndpoints();
         app.MapCompanyEndpoints();
         app.MapInviteCodeEndpoints();
         app.MapInternalCompanyEndpoints();

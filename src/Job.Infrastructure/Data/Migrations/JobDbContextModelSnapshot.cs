@@ -237,12 +237,6 @@ namespace Job.Infrastructure.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
-                    b.Property<DateTime?>("ApprovedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid?>("ApprovedBy")
-                        .HasColumnType("uuid");
-
                     b.Property<string>("Benefits")
                         .HasColumnType("text");
 
@@ -278,18 +272,18 @@ namespace Job.Infrastructure.Data.Migrations
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)");
 
-                    b.Property<Guid>("RecruiterId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime?>("RejectedAt")
+                    b.Property<DateTime?>("ModeratedAt")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<Guid?>("RejectedBy")
+                    b.Property<Guid?>("ModeratedBy")
                         .HasColumnType("uuid");
 
-                    b.Property<string>("RejectionReason")
+                    b.Property<string>("ModerationReason")
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)");
+
+                    b.Property<Guid>("RecruiterId")
+                        .HasColumnType("uuid");
 
                     b.Property<string>("Requirements")
                         .HasColumnType("text");
