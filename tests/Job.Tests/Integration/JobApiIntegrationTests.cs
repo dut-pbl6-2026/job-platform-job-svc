@@ -58,6 +58,25 @@ public class JobApiIntegrationTests
         Assert.Equal(JobContractTests.JobDetailFields.Order(), item.EnumerateObject().Select(p => p.Name).Order());
     }
 
+    [Fact]
+    public async Task RecruiterList_HidesRemovedJobsUnlessDeletedIsRequested()
+    {
+        await using var host = await JobApiTestHost.StartAsync();
+        var companyId = await host.CreateCompanyAsync(OwnerRecruiter, "Own Corp");
+        var jobId = await CreateJobAsync(host, OwnerRecruiter, companyId);
+
+        using (var deleted = await host.SendAsync(HttpMethod.Delete, $"/api/jobs/{jobId}", OwnerRecruiter, "Recruiter"))
+            Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
+
+        using var all = await host.SendAsync(HttpMethod.Get, "/api/jobs/recruiter", OwnerRecruiter, "Recruiter");
+        var allJson = await all.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(0, allJson.GetProperty("total").GetInt32());
+
+        using var tombstones = await host.SendAsync(HttpMethod.Get, "/api/jobs/recruiter?status=Deleted", OwnerRecruiter, "Recruiter");
+        var tombstonesJson = await tombstones.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(1, tombstonesJson.GetProperty("total").GetInt32());
+    }
+
     [Theory]
     [InlineData(JobStatus.Pending)]
     [InlineData(JobStatus.Rejected)]
