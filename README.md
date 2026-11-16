@@ -1,14 +1,14 @@
 # job-platform-job-svc
 
-Job service for **Vietnam Job Platform** (`pbl6`) — `dut-pbl6-2026`. `Job CRUD` `Category` `Company` `SavedJob`, `Port 5002` `net10.0`.
+Job service for **Vietnam Job Platform** (`pbl6`) — `dut-pbl6-2026`. `Job CRUD` `Category` `Company` `SavedJob` `CompanyJoinRequest` `InviteCode`, `Port 5002` `net10.0`.
 
 ## Overview
 
 - `src/Job.Api` — Web API `Swagger` `health` `migrate` command
-- `src/Job.Core` — Domain (`Job` `Category` `Company` `SavedJob` `: Entity`)
+- `src/Job.Core` — Domain (`Job` `Category` `Company` `SavedJob` `CompanyJoinRequest` `InviteCode` `JobInteraction` `: Entity`)
 - `src/Job.Infrastructure` — `JobDbContext` `Npgsql` `Migrations` `SeedData`
 - `tests` — `xunit` entity tests
-- GitHub Packages feed (`nuget.config`) — `JobPlatform.SharedKernel 0.3.1`; restore needs `GITHUB_TOKEN` with `read:packages`
+- GitHub Packages feed (`nuget.config`) — `JobPlatform.SharedKernel 0.4.0`; restore needs `GITHUB_TOKEN` with `read:packages`
 
 ## Prerequisites
 
@@ -47,7 +47,7 @@ mise run format    # dotnet format --verify-no-changes
 mise run ef-check
 ```
 
-Update SharedKernel: `mise run pack-shared`.
+Update SharedKernel: bump the `PackageReference` to the version released from `job-platform-shared` (GitHub Packages).
 
 ## Run
 
@@ -71,9 +71,11 @@ curl -X POST http://localhost:5002/api/jobs \
 ## Docker
 
 ```bash
-docker build -t job .
+GITHUB_TOKEN=<token with read:packages> docker build --secret id=nuget_token,env=GITHUB_TOKEN -t job .
 docker run -p 5002:5002 --env-file .env job
 ```
+
+The Dockerfile restores `JobPlatform.SharedKernel` from GitHub Packages through the BuildKit secret `nuget_token`; a plain `docker build` without it fails with `NU1301` (`401`). In `job-platform-infra`, `docker-compose.yml` supplies the secret from the `GITHUB_TOKEN` environment variable.
 
 `Dockerfile` `sdk:10.0` `aspnet:10.0` `USER app` `HEALTHCHECK curl /health`.
 
@@ -137,16 +139,37 @@ docker run -p 5002:5002 --env-file .env job
 | `RECOMMENDATION_BACKFILL_ENABLED` | false | compose turns it on |
 | `APP_SERVICE_URL` | — | required when backfill is on |
 | `JOB_INTERNAL_TOKEN_FOR_APP` | — | bearer token app-svc presents on `/api/internal/jobs/{id}`; required outside Development |
-| `JOB_INTERNAL_TOKEN_FOR_AUTH` | — | bearer token auth-svc presents on `/api/internal/stats`; required outside Development |
+| `JOB_INTERNAL_TOKEN_FOR_AUTH` | — | bearer token auth-svc presents on `/api/internal/stats` and the company self-serve lookups; required outside Development |
+| `AUTH_SERVICE_URL` | — | auth-svc base URL for the join-request link-company call |
+| `AUTH_INTERNAL_TOKEN_FOR_JOB` | — | bearer token job-svc presents on auth-svc `/api/internal/users/{id}/link-company` |
+| `COMPANY_JOIN_REQUEST_TTL_DAYS` | `7` | join-request waiting period; expiry is computed on read and stored by a daily job |
+| `COMPANY_EMAIL_DOMAIN_BLOCKLIST` | — | optional extra free-provider domains (comma separated) added to the built-in list |
 | `INVITE_CODE_TTL_DAYS` | `7` | lifetime of a recruiter invite code (AUTH-01-09); single use |
 | `APP_INTERNAL_TOKEN_FOR_JOB` | — | bearer token job-svc presents to app-svc `/api/internal/applications` (backfill) |
 | `KAFKA_TOPIC_APPLICATION_EVENTS` | `application-events` | |
 | `KAFKA_GROUP_JOB_RECOMMENDER` | `job-svc-recommender` | never the shared `KAFKA_GROUP_ID` |
 
+## Company self-serve sign-up and join requests (AUTH-01-06, AUTH-01-09 to AUTH-01-15)
+
+Company self-serve sign-up is completed by auth-svc; job-svc owns the Company records, the invite codes and the join requests.
+
+- Internal (auth-svc only, bearer `JOB_INTERNAL_TOKEN_FOR_AUTH`, fail-closed `401`, not gateway-routed):
+  - `POST /api/internal/companies/availability` — `{ companyName, taxCode? }` → `{ available }`. Both values are in the body, so they stay out of access logs.
+  - `POST /api/internal/companies/domain-match` — `{ domain }` → `{ companyId }` or `{ companyId: null }` for the verified Company that holds the domain.
+  - `POST /api/internal/companies` — `{ name, taxCode?, createdBy, emailDomain }` → `{ companyId, emailDomain, verified }`. Idempotent for the same founder, name, tax code and domain.
+  - `POST /api/internal/company-join-requests` — `{ userId, companyId }` → the pending request, or `409 JOIN_REQUEST_EXISTS`.
+  - `POST /api/internal/company-join-requests/{id}/support-decision` — `{ decision, reason, operator? }` for an Escalated request.
+- Requester: `GET /api/companies/me/join-request` (404 when there is none; the view carries `status`, `expiresAt`, `createdAt`, `canEscalate`) and `POST /api/companies/me/join-request/escalate` (once, only when Expired; otherwise `409 JOIN_REQUEST_STATE_INVALID`).
+- Company admin (`companies.created_by`): `GET /api/companies/{id}/join-requests` (1-based page, size 1–100), `POST /api/companies/{id}/join-requests/{requestId}/approve` and `.../reject`. Approval calls auth-svc `POST /api/internal/users/{userId}/link-company`; if that fails the request stays Pending, so the admin can retry.
+- Waiting period: `COMPANY_JOIN_REQUEST_TTL_DAYS` (default 7). Expiry is computed on read, and a daily job stores the `Expired` status.
+- Invite codes: `POST /api/companies/{id}/invite-codes` `{ email }` (Recruiter and company creator only; the plain code is shown once). Internal auth-svc routes are `POST /api/internal/invite-codes/check`, `/redeem` (both `{ code, email }`) and `/{id}/release`. Every bad code, including one bound to another address, is `422 INVITE_CODE_INVALID`.
+
+Env: `AUTH_SERVICE_URL` (auth-svc base URL for the link-company call), `AUTH_INTERNAL_TOKEN_FOR_JOB` (token job-svc presents to auth-svc), `COMPANY_JOIN_REQUEST_TTL_DAYS` (default 7), `COMPANY_EMAIL_DOMAIN_BLOCKLIST` (optional extra free-provider domains, comma separated).
+
 ## Troubleshooting
 
 - `dotnet: command not found` → `mise trust` not run
-- `NU1301 local source` → `mise run pack-shared`
+- `NU1301 401` from GitHub Packages → set `GITHUB_TOKEN` with `read:packages` (the package is public, but the feed still requires authentication)
 - `password authentication failed` → `cd ../job-platform-infra && docker compose up -d && docker compose ps`
 - `mise run verify` not 14 → re-run `mise run sync-env`
 

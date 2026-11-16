@@ -23,13 +23,13 @@ Agent uses `mise exec -- dotnet ...` / `mise exec -- infisical ...` due to non-i
 
 ```
 src/Job.Api            → Web API (Program.cs JWT Bearer + Swagger + /health; `migrate` one-off command)
-src/Job.Core           → Domain (Job, Category, Company, SavedJob : Entity)
+src/Job.Core           → Domain (Job, Category, Company, SavedJob, CompanyJoinRequest, InviteCode, JobInteraction : Entity)
 src/Job.Infrastructure → Data (JobDbContext Npgsql, Migrations) + Services
 tests/Job.Tests        → xunit
 JobService.sln         → mise run build/test
 ```
 
-Dependency: `Api → Infrastructure → Core → SharedKernel` (`PackageReference JobPlatform.SharedKernel 0.3.1` via the GitHub Packages feed in `nuget.config`, never `ProjectReference` per `master-plan.md:132`). `MAINT-01` clean arch, `Result<T>` for domain failures not exceptions.
+Dependency: `Api → Infrastructure → Core → SharedKernel` (`PackageReference JobPlatform.SharedKernel 0.4.0` via the GitHub Packages feed in `nuget.config`, never `ProjectReference` per `master-plan.md:132`). `MAINT-01` clean arch, `Result<T>` for domain failures not exceptions.
 
 ## SRS mapping (JOB-01)
 
@@ -39,6 +39,9 @@ Dependency: `Api → Infrastructure → Core → SharedKernel` (`PackageReferenc
 - `DELETE /api/jobs/{id}` soft delete (owner only), mark as deleted.
 - `GET /api/jobs/{id}` get job details, only active/pending (not deleted).
 - `GET /api/categories` list categories (no auth required). Predefined: IT, Finance, Marketing, Healthcare, Education, Engineering, Sales, Hospitality, Others.
+- Company self-serve (AUTH-01-10 to AUTH-01-14): internal `POST /api/internal/companies/availability` (`{companyName,taxCode?}` → `{available}`), `/domain-match` (`{domain}` → `{companyId}`), `/companies` (`{name,taxCode?,createdBy,emailDomain}` → `{companyId,emailDomain,verified}`), `/company-join-requests` and `/{id}/support-decision`; all bearer `JOB_INTERNAL_TOKEN_FOR_AUTH`, fail-closed, not gateway-routed.
+- Join requests: `GET /api/companies/me/join-request`, `POST /api/companies/me/join-request/escalate`, admin `GET /api/companies/{id}/join-requests` and `POST .../{requestId}/approve|reject`. Waiting period `COMPANY_JOIN_REQUEST_TTL_DAYS` (default 7); approval calls auth-svc link-company and leaves the request Pending when that call fails.
+- Invite codes: `POST /api/companies/{id}/invite-codes` `{email}` (Recruiter + creator), internal `check`/`redeem`/`release` with `{code,email}`; bound to one address, every bad code is `422 INVITE_CODE_INVALID`.
 - Gateway `GW-01` routes `/api/jobs/*` → Job Service, validates JWT then forwards `X-User-Id/Role`.
 
 ## JWT (SharedKernel JwtOptions)
@@ -62,7 +65,7 @@ Validate in `Program.cs` (when JWT Bearer is added in W2): `ValidateIssuer=true 
 
 ## Data — EF Core (NFR `6-nfr.md:MAINT`)
 
-- `JobDbContext: DbSet<Job,Category,Company,SavedJob>` `UseNpgsql(ConnectionStrings:JobDb / DATABASE_URL_JOB)`.
+- `JobDbContext: DbSet<JobPosting,Category,Company,SavedJob,OutboxEvent,JobInteraction,InviteCode,CompanyJoinRequest>` `UseNpgsql(ConnectionStrings:JobDb / DATABASE_URL_JOB)`.
 - Fluent: `Category Name unique 128 required Description`, `Company Name unique 256 TaxCode unique nullable Verified default false LogoUrl Website Description Address Industry Size`, `Job Title 256 required Description required CompanyId FK Location SalaryMin SalaryMax SalaryCurrency CategoryId FK Requirements Benefits EmploymentType 64 ExperienceLevel 64 RecruiterId Status(JobStatus enum → string 32) HasQueryFilter(Status!=Deleted) ViewCount default 0`, `SavedJob UserId JobId FK` (SRS `saved_at` = `Entity.CreatedAt`, no extra column).
 - Migrations `src/Job.Infrastructure/Data/Migrations/` — `mise run ef-check` in PR+CI, applied by the `migrate` command.
 - Seed predefined categories in the `migrate` command, idempotent (IT, Finance, Marketing, Healthcare, Education, Engineering, Sales, Hospitality, Others).
@@ -114,7 +117,7 @@ var conn = builder.Configuration.GetConnectionString("JobDb")
 - `appsettings.json` MAY contain **placeholder comments** like `"<set via env>"` but MUST NOT contain real credentials or real hostnames.
 - `appsettings.Development.json` MAY point to `localhost` **only** for local-dev convenience; never commit real passwords.
 - The single source of truth for all env values is `../job-platform-infra/envs/.env.dev.example` — use `mise run sync-env` to pull it.
-- Required env vars for this service: `DATABASE_URL_JOB`, `Jwt__MetadataAddress` (outside Development).
+- Required env vars for this service: `DATABASE_URL_JOB`, `Jwt__MetadataAddress` (outside Development), `AUTH_SERVICE_URL` and `AUTH_INTERNAL_TOKEN_FOR_JOB` for join-request approval, `COMPANY_JOIN_REQUEST_TTL_DAYS` (default 7), optional `COMPANY_EMAIL_DOMAIN_BLOCKLIST`.
 
 ## 2026 best practice (NFR `MAINT`)
 
