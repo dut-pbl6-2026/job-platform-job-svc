@@ -248,7 +248,7 @@ public sealed class SelfServeCompanyEndpointTests : IDisposable
 
         var created = Assert.IsType<Created<InternalCompanyEndpoints.CreateCompanyResponse>>(result);
         var stored = await _db.Companies.SingleAsync(c => c.CreatedBy == founder);
-        Assert.Equal(created.Value!.Id, stored.Id);
+        Assert.Equal(created.Value!.CompanyId, stored.Id);
         Assert.True(stored.Verified);
         Assert.Equal("delta.vn", stored.EmailDomain);
     }

@@ -65,6 +65,24 @@ public sealed class SelfServeHttpTests
     }
 
     [Fact]
+    public async Task CreateCompany_OverHttp_ReturnsCompanyIdAsTheContractName()
+    {
+        await using var host = await JobApiTestHost.StartAsync();
+        var founder = Guid.NewGuid();
+
+        using var response = await Send(host, "/api/internal/companies",
+            $"Bearer {JobApiTestHost.AuthInternalToken}",
+            new { name = "New Founder Co", taxCode = (string?)null, createdBy = founder, emailDomain = "founder-co.test" });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        // auth-svc binds this property into CreatedCompanyBody(Guid CompanyId): the name is the contract.
+        Assert.True(json.TryGetProperty("companyId", out var companyId));
+        Assert.NotEqual(Guid.Empty, companyId.GetGuid());
+        Assert.False(json.TryGetProperty("id", out _));
+    }
+
+    [Fact]
     public async Task InviteCode_IssuedOverHttp_RedeemsOnlyWithTheBoundEmail()
     {
         await using var host = await JobApiTestHost.StartAsync();
@@ -105,7 +123,7 @@ public sealed class SelfServeHttpTests
         Assert.Equal(HttpStatusCode.OK, mine.StatusCode);
         Assert.Equal("Pending", (await mine.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("status").GetString());
 
-        var requestId = (await create.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+        var requestId = (await create.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("joinRequestId").GetGuid();
         using var approve = await host.SendAsync(HttpMethod.Post,
             $"/api/companies/{companyId}/join-requests/{requestId}/approve", Founder, "Recruiter");
         Assert.Equal(HttpStatusCode.ServiceUnavailable, approve.StatusCode);
