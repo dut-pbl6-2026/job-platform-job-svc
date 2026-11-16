@@ -156,7 +156,8 @@ transaction, so it is searchable and visible on the public company page immediat
 pre-approval and no `FEATURE_ADMIN_APPROVAL` flag.
 
 The company has full read/write over its own jobs (`GET /api/jobs/recruiter`, `PUT`/`DELETE /api/jobs/{id}`
-by the poster). Web admin moderation can only remove and restore:
+by the poster). The recruiter list hides jobs the caller removed unless `status=Deleted` is requested, since
+there is no restore action for recruiters. Web admin moderation can only remove and restore:
 
 | Endpoint | Auth | Behaviour |
 |----------|------|-----------|

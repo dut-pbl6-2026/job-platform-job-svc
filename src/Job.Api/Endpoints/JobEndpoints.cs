@@ -152,6 +152,10 @@ public static class JobEndpoints
         if (!string.IsNullOrEmpty(status) &&
             Enum.TryParse<JobStatus>(status, ignoreCase: true, out var statusEnum))
             query = query.Where(j => j.Status == statusEnum);
+        else if (string.IsNullOrEmpty(status))
+            // A recruiter who removed a job should not keep seeing it in the list: there is no
+            // restore action for them. Ask for status=Deleted explicitly to inspect tombstones.
+            query = query.Where(j => j.Status != JobStatus.Deleted);
 
         var total = await query.CountAsync();
         var items = await query
