@@ -53,11 +53,14 @@ public static class InternalCompanyEndpoints
 
     public sealed record CreateCompanyRequest(string? Name, string? TaxCode, Guid CreatedBy, string? EmailDomain);
 
-    public sealed record CreateCompanyResponse(Guid Id, string EmailDomain, bool Verified);
+    // The property name is the contract: auth-svc deserialises { companyId } (SRS Appendix D) and
+    // would otherwise bind an all-zero Guid and link the founder to no company.
+    public sealed record CreateCompanyResponse(Guid CompanyId, string EmailDomain, bool Verified);
 
     public sealed record CreateJoinRequestRequest(Guid UserId, Guid CompanyId);
 
-    public sealed record JoinRequestResponse(Guid Id, Guid CompanyId, Guid UserId, string Status, DateTimeOffset ExpiresAt);
+    // auth-svc calls this during verification; the SRS names the identifier { joinRequestId }.
+    public sealed record JoinRequestResponse(Guid JoinRequestId, Guid CompanyId, Guid UserId, string Status, DateTimeOffset ExpiresAt);
 
     public sealed record SupportDecisionRequest(string? Decision, string? Reason, string? Operator);
 
