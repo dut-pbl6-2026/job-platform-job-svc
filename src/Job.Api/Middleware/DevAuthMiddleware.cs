@@ -3,12 +3,54 @@ using System.Security.Claims;
 namespace Job.Api.Middleware;
 
 /// <summary>
+/// Opt-in switch for the development header auth. <c>ENABLE_DEV_AUTH=true</c> is required even in
+/// Development (same contract as app-svc): <c>ASPNETCORE_ENVIRONMENT=Development</c> alone must not
+/// trust caller-supplied <c>X-User-Id</c>/<c>X-User-Role</c> headers.
+/// </summary>
+public static class DevAuthPolicy
+{
+    public const string SettingKey = "ENABLE_DEV_AUTH";
+
+    /// <summary>Parses the flag explicitly; anything except "true" (case-insensitive) is disabled.</summary>
+    public static bool IsEnabled(IConfiguration configuration) =>
+        string.Equals(configuration[SettingKey], "true", StringComparison.OrdinalIgnoreCase);
+}
+
+/// <summary>Pipeline registration for the opt-in development header auth.</summary>
+public static class DevAuthRegistration
+{
+    /// <summary>
+    /// Adds <see cref="DevAuthMiddleware"/> only in Development with ENABLE_DEV_AUTH=true. Outside those
+    /// conditions it does nothing, so Development alone never trusts caller-supplied identity headers.
+    /// </summary>
+    public static IApplicationBuilder UseDevAuthIfEnabled(this IApplicationBuilder app)
+    {
+        var environment = app.ApplicationServices.GetRequiredService<IWebHostEnvironment>();
+        var configuration = app.ApplicationServices.GetRequiredService<IConfiguration>();
+        var logger = app.ApplicationServices
+            .GetRequiredService<ILoggerFactory>()
+            .CreateLogger(nameof(DevAuthMiddleware));
+
+        if (!environment.IsDevelopment() || !DevAuthPolicy.IsEnabled(configuration))
+        {
+            logger.LogInformation(
+                "DevAuthMiddleware disabled: requires Development and ENABLE_DEV_AUTH=true.");
+            return app;
+        }
+
+        logger.LogWarning(
+            "DevAuthMiddleware enabled: trusting X-User-Id/X-User-Role headers (ENABLE_DEV_AUTH=true, Development only).");
+        app.UseMiddleware<DevAuthMiddleware>();
+        return app;
+    }
+}
+
+/// <summary>
 /// DEVELOPMENT ONLY — Reads X-User-Id and X-User-Role headers injected by Gateway (GW-01)
 /// or Postman and creates a ClaimsPrincipal so endpoints can read ctx.User without a real JWT.
 /// In Production, real JWT Bearer validation is used (see Program.cs).
-/// SECURITY: This middleware is only registered when ASPNETCORE_ENVIRONMENT=Development.
+/// SECURITY: only registered in Development when ENABLE_DEV_AUTH=true (see Program.cs).
 /// Never enable in Production — gateway is the sole trusted issuer of X-User-* headers.
-/// For local testing without gateway, you may set X-User-Id / X-User-Role directly.
 /// </summary>
 public class DevAuthMiddleware
 {
@@ -47,6 +89,10 @@ public class DevAuthMiddleware
                 new(ClaimTypes.NameIdentifier, userId),
                 new(ClaimTypes.Role, role ?? "User")
             };
+            // Recruiter company from the gateway, which copies the JWT company_id claim (GW-01).
+            var company = context.Request.Headers["X-User-Company"].FirstOrDefault();
+            if (Guid.TryParse(company, out var companyId) && companyId != Guid.Empty)
+                claims.Add(new Claim("company_id", companyId.ToString()));
             context.User = new ClaimsPrincipal(new ClaimsIdentity(claims, "Gateway"));
         }
 

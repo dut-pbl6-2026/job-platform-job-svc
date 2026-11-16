@@ -164,8 +164,10 @@ if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
-    // feat(job): add DevAuthMiddleware — dev-only header auth (no JWT needed for Postman testing)
-    app.UseMiddleware<DevAuthMiddleware>();
+
+    // SECURITY: header auth is opt-in (ENABLE_DEV_AUTH=true), matching app-svc. Development alone
+    // must not trust caller-supplied X-User-Id/X-User-Role, because :5002 is reachable on the LAN.
+    app.UseDevAuthIfEnabled();
 }
 else
 {
