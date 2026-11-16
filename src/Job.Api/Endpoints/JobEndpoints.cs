@@ -66,7 +66,6 @@ public static class JobEndpoints
         JobCreateDto dto,
         JobDbContext db,
         HttpContext ctx,
-        IConfiguration configuration,
         CancellationToken ct)
     {
         var (recruiterId, role) = IdentityHelper.GetIdentity(ctx);
@@ -108,12 +107,11 @@ public static class JobEndpoints
         JobPosting job;
         try
         {
-            var adminApprovalEnabled =
-                bool.TryParse(configuration["FEATURE_ADMIN_APPROVAL"], out var enabled) && enabled;
+            // Jobs publish instantly (owner decision): no admin pre-approval, so a new company job is
+            // Active the moment it is created and is indexed by search-svc from job.created.
             job = new JobPosting(
                 dto.Title, dto.Description, dto.CompanyId, dto.Location,
                 recruiterId.Value,
-                initialStatus: adminApprovalEnabled ? JobStatus.Pending : JobStatus.Active,
                 salaryMin: dto.SalaryMin,
                 salaryMax: dto.SalaryMax,
                 salaryCurrency: dto.SalaryCurrency ?? "VND",

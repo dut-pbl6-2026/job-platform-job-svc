@@ -83,8 +83,9 @@ public class JobDbContext : DbContext
                 .HasMaxLength(32)
                 .HasDefaultValue(JobStatus.Active);
 
-            // feat(admin): Pending/Rejected jobs hidden from public browse by default.
-            // Admin endpoints call .IgnoreQueryFilters() to access them.
+            // Jobs publish instantly: only a soft delete (recruiter DELETE or admin takedown) hides one
+            // from public reads. Pending/Rejected are legacy approval-flow values that the migration
+            // converts away; they stay hidden until then. Admin endpoints use .IgnoreQueryFilters().
             e.HasQueryFilter(x => x.Status != JobStatus.Deleted
                                   && x.Status != JobStatus.Pending
                                   && x.Status != JobStatus.Rejected);
@@ -99,8 +100,8 @@ public class JobDbContext : DbContext
             e.Property(x => x.ExperienceLevel).HasMaxLength(64).HasDefaultValue("Entry");
             e.Property(x => x.ViewCount).HasDefaultValue(0);
 
-            // feat(admin): rejection/approval fields
-            e.Property(x => x.RejectionReason).HasMaxLength(500);
+            // Web admin moderation (takedown/restore) audit: reason, actor and time.
+            e.Property(x => x.ModerationReason).HasMaxLength(JobPosting.ModerationReasonMaxLength);
 
             e.HasOne(x => x.Company)
                 .WithMany()

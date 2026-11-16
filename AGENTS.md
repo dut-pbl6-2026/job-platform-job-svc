@@ -33,11 +33,13 @@ Dependency: `Api → Infrastructure → Core → SharedKernel` (`PackageReferenc
 
 ## SRS mapping (JOB-01)
 
-- `POST /api/jobs` create job (Recruiter, required: title, description, company_id FK, location, salary_min/max, category_id, requirements), status='active'.
+- `POST /api/jobs` create job (Recruiter, required: title, description, company_id FK, location, salary_min/max, category_id, requirements), status='active' immediately — no admin pre-approval (`Active`).
 - `GET /api/jobs/recruiter` list recruiter's jobs, pagination (page, size), filter by status.
 - `PUT /api/jobs/{id}` update job (owner only), auto-update timestamp.
 - `DELETE /api/jobs/{id}` soft delete (owner only), mark as deleted.
-- `GET /api/jobs/{id}` get job details, only active/pending (not deleted).
+- `GET /api/jobs/{id}` get job details, only active/closed (not deleted or legacy pending/rejected).
+- Admin moderation (Admin only): `POST /api/admin/jobs/{id}/takedown` `{reason}` (required, max 500; status Deleted + moderation audit + `job.deleted`, idempotent) and `POST /api/admin/jobs/{id}/restore` (moderated rows only; Active + audit cleared + `job.updated`). Approve/reject no longer exist.
+- Company surface: `GET /api/companies/mine` (Recruiter; company detail + `isCompanyAdmin` = `CreatedBy == caller`, 404 when unlinked) and public `GET /api/companies/{id}/jobs` (Active only, 0-based paging, size cap 100). `PUT /api/companies/{id}` stays owner-only.
 - `GET /api/categories` list categories (no auth required). Predefined: IT, Finance, Marketing, Healthcare, Education, Engineering, Sales, Hospitality, Others.
 - Company self-serve (AUTH-01-10 to AUTH-01-14): internal `POST /api/internal/companies/availability` (`{companyName,taxCode?}` → `{available}`), `/domain-match` (`{domain}` → `{companyId}`), `/companies` (`{name,taxCode?,createdBy,emailDomain}` → `{companyId,emailDomain,verified}`), `/company-join-requests` and `/{id}/support-decision`; all bearer `JOB_INTERNAL_TOKEN_FOR_AUTH`, fail-closed, not gateway-routed.
 - Join requests: `GET /api/companies/me/join-request`, `POST /api/companies/me/join-request/escalate`, admin `GET /api/companies/{id}/join-requests` and `POST .../{requestId}/approve|reject`. Waiting period `COMPANY_JOIN_REQUEST_TTL_DAYS` (default 7); approval calls auth-svc link-company and leaves the request Pending when that call fails.
@@ -66,7 +68,7 @@ Validate in `Program.cs` (when JWT Bearer is added in W2): `ValidateIssuer=true 
 ## Data — EF Core (NFR `6-nfr.md:MAINT`)
 
 - `JobDbContext: DbSet<JobPosting,Category,Company,SavedJob,OutboxEvent,JobInteraction,InviteCode,CompanyJoinRequest>` `UseNpgsql(ConnectionStrings:JobDb / DATABASE_URL_JOB)`.
-- Fluent: `Category Name unique 128 required Description`, `Company Name unique 256 TaxCode unique nullable Verified default false LogoUrl Website Description Address Industry Size`, `Job Title 256 required Description required CompanyId FK Location SalaryMin SalaryMax SalaryCurrency CategoryId FK Requirements Benefits EmploymentType 64 ExperienceLevel 64 RecruiterId Status(JobStatus enum → string 32) HasQueryFilter(Status!=Deleted) ViewCount default 0`, `SavedJob UserId JobId FK` (SRS `saved_at` = `Entity.CreatedAt`, no extra column).
+- Fluent: `Category Name unique 128 required Description`, `Company Name unique 256 TaxCode unique nullable Verified default false LogoUrl Website Description Address Industry Size`, `Job Title 256 required Description required CompanyId FK Location SalaryMin SalaryMax SalaryCurrency CategoryId FK Requirements Benefits EmploymentType 64 ExperienceLevel 64 RecruiterId Status(JobStatus enum → string 32) HasQueryFilter(Status!=Deleted && Status!=Pending && Status!=Rejected, the last two are legacy) ModerationReason 500 ModeratedBy ModeratedAt ViewCount default 0`, `SavedJob UserId JobId FK` (SRS `saved_at` = `Entity.CreatedAt`, no extra column).
 - Migrations `src/Job.Infrastructure/Data/Migrations/` — `mise run ef-check` in PR+CI, applied by the `migrate` command.
 - Seed predefined categories in the `migrate` command, idempotent (IT, Finance, Marketing, Healthcare, Education, Engineering, Sales, Hospitality, Others).
 

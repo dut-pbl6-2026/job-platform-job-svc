@@ -149,6 +149,37 @@ The Dockerfile restores `JobPlatform.SharedKernel` from GitHub Packages through 
 | `KAFKA_TOPIC_APPLICATION_EVENTS` | `application-events` | |
 | `KAFKA_GROUP_JOB_RECOMMENDER` | `job-svc-recommender` | never the shared `KAFKA_GROUP_ID` |
 
+## Job publishing and moderation
+
+Jobs publish **instantly**: `POST /api/jobs` creates an `Active` job and queues `job.created` in the same
+transaction, so it is searchable and visible on the public company page immediately. There is no admin
+pre-approval and no `FEATURE_ADMIN_APPROVAL` flag.
+
+The company has full read/write over its own jobs (`GET /api/jobs/recruiter`, `PUT`/`DELETE /api/jobs/{id}`
+by the poster). Web admin moderation can only remove and restore:
+
+| Endpoint | Auth | Behaviour |
+|----------|------|-----------|
+| `POST /api/admin/jobs/{id}/takedown` `{ "reason": "..." }` | Admin | Reason required, trimmed, max 500 → `422` otherwise. Sets status `Deleted`, stores `moderationReason`/`moderatedBy`/`moderatedAt` and queues `job.deleted` (search removes it). `200` and idempotent: a repeated call keeps the first audit and queues no second event. Also records moderation on a job the recruiter had soft-deleted. |
+| `POST /api/admin/jobs/{id}/restore` | Admin | Only a `Deleted` job with a moderation record (a job deleted by its recruiter is `409`). Sets `Active`, clears the three moderation fields and queues `job.updated` so search-svc re-indexes it. |
+
+`GET /api/admin/jobs` / `GET /api/admin/jobs/{id}` (Admin) show every status, including `Deleted`, plus the
+moderation fields. Legacy `Pending`/`Rejected` values from the removed approval flow are still renderable
+(the migration `ReplaceApprovalWithModeration` converts rows: `Pending → Active`, `Rejected → Closed`, and
+keeps the old rejection reason/actor/time in the moderation columns).
+
+## Company surface
+
+- `GET /api/companies/mine` — Recruiter only, resolves the `company_id` claim (falling back to
+  `CreatedBy` for older tokens) and returns the public company detail plus `isCompanyAdmin`.
+  `isCompanyAdmin` is true only for the creator (`Company.CreatedBy`); other recruiters of the company are
+  members with view-only access. `404` when no company is linked. `CreatedBy` itself is never exposed.
+- `GET /api/companies/{id}/jobs?page=0&size=20` — public company page: `Active` jobs only, newest first,
+  0-based paging (size capped at 100), minimal job fields (`id`, `title`, `companyId`, `companyName`,
+  `location`, salary, `categoryId`/`categoryName`, `employmentType`, `experienceLevel`, `createdAt`).
+  `404` for an unknown company.
+- `PUT /api/companies/{id}` stays owner-only (`CreatedBy == caller`): member `403`, Admin `403`.
+
 ## Company self-serve sign-up and join requests (AUTH-01-06, AUTH-01-09 to AUTH-01-15)
 
 Company self-serve sign-up is completed by auth-svc; job-svc owns the Company records, the invite codes and the join requests.

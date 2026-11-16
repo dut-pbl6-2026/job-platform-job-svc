@@ -22,17 +22,16 @@ public class Job : Entity
     public JobStatus Status { get; private set; } = JobStatus.Active;
     public int ViewCount { get; private set; }
 
-    // ── Admin approval fields (feat(admin): Admin APIs — Slice 3) ─────────────
-    /// <summary>Reason provided by admin when rejecting a Pending job.</summary>
-    public string? RejectionReason { get; private set; }
-    /// <summary>UTC timestamp when the job was rejected by an admin.</summary>
-    public DateTime? RejectedAt { get; private set; }
-    /// <summary>Admin user id who rejected the job.</summary>
-    public Guid? RejectedBy { get; private set; }
-    /// <summary>UTC timestamp when the job was approved by an admin.</summary>
-    public DateTime? ApprovedAt { get; private set; }
-    /// <summary>Admin user id who approved the job.</summary>
-    public Guid? ApprovedBy { get; private set; }
+    // ── Moderation (web admin takedown / restore) ─────────────────────────────
+    /// <summary>Longest accepted takedown reason, mirrored by JobDbContext and the takedown endpoint.</summary>
+    public const int ModerationReasonMaxLength = 500;
+
+    /// <summary>Reason the admin gave when taking the job down. Null when the job was never moderated.</summary>
+    public string? ModerationReason { get; private set; }
+    /// <summary>Admin user id who took the job down.</summary>
+    public Guid? ModeratedBy { get; private set; }
+    /// <summary>UTC timestamp of the takedown.</summary>
+    public DateTime? ModeratedAt { get; private set; }
 
     private Job() { }
 
@@ -77,9 +76,9 @@ public class Job : Entity
     }
 
     /// <summary>
-    /// Overload that lets the application layer pass an explicit initial status.
-    /// Use when FEATURE_ADMIN_APPROVAL is enabled: pass <see cref="JobStatus.Pending"/>
-    /// so new recruiter jobs enter the admin approval queue.
+    /// Overload that lets the application layer pass an explicit initial status (for seeding legacy data
+    /// and tests). Production creation uses the default <see cref="JobStatus.Active"/>: jobs publish
+    /// instantly, with no admin pre-approval.
     /// The domain entity itself never reads configuration (MAINT-01 clean architecture).
     /// </summary>
     public Job(
@@ -104,43 +103,46 @@ public class Job : Entity
         Status = initialStatus;
     }
 
-    // ── Admin approval domain methods ─────────────────────────────────────────
+    // ── Moderation domain methods ─────────────────────────────────────────────
 
     /// <summary>
-    /// Transitions a <see cref="JobStatus.Pending"/> job to <see cref="JobStatus.Active"/>.
-    /// Returns <see cref="Result.Failure"/> if the job is not in Pending status.
+    /// Takes a job down: status becomes <see cref="JobStatus.Deleted"/> (the same state as a recruiter
+    /// soft-delete, so every public read hides it) and the moderation audit is recorded.
+    /// Returns <see cref="Result.Failure"/> if the reason is missing or too long.
     /// Never throws — callers must check <see cref="Result.IsSuccess"/>.
     /// </summary>
-    public Result ApprovePending(Guid approvedBy)
+    public Result Takedown(string reason, Guid moderatedBy)
     {
-        if (Status != JobStatus.Pending)
-            return Result.Failure("Job is not in Pending status.");
+        if (string.IsNullOrWhiteSpace(reason))
+            return Result.Failure("Moderation reason is required.");
 
-        Status = JobStatus.Active;
-        ApprovedBy = approvedBy;
-        ApprovedAt = DateTime.UtcNow;
+        var trimmed = reason.Trim();
+        if (trimmed.Length > ModerationReasonMaxLength)
+            return Result.Failure($"Moderation reason must not exceed {ModerationReasonMaxLength} characters.");
+
+        Status = JobStatus.Deleted;
+        ModerationReason = trimmed;
+        ModeratedBy = moderatedBy;
+        ModeratedAt = DateTime.UtcNow;
         Touch();
         return Result.Success();
     }
 
     /// <summary>
-    /// Transitions a <see cref="JobStatus.Pending"/> job to <see cref="JobStatus.Rejected"/>.
-    /// Returns <see cref="Result.Failure"/> if the job is not in Pending status or reason fails validation.
+    /// Restores a job that was taken down by moderation: status becomes <see cref="JobStatus.Active"/>
+    /// and the moderation audit is cleared. A job deleted by its recruiter (no moderation record) is
+    /// not restorable. Returns <see cref="Result.Failure"/> when the job is not in that state.
     /// Never throws — callers must check <see cref="Result.IsSuccess"/>.
     /// </summary>
-    public Result RejectPending(string reason, Guid rejectedBy)
+    public Result Restore()
     {
-        if (Status != JobStatus.Pending)
-            return Result.Failure("Job is not in Pending status.");
-        if (string.IsNullOrWhiteSpace(reason))
-            return Result.Failure("Rejection reason is required.");
-        if (reason.Length > 500)
-            return Result.Failure("Rejection reason must not exceed 500 characters.");
+        if (Status != JobStatus.Deleted || ModerationReason is null)
+            return Result.Failure("Only a job taken down by moderation can be restored.");
 
-        Status = JobStatus.Rejected;
-        RejectionReason = reason.Trim();
-        RejectedBy = rejectedBy;
-        RejectedAt = DateTime.UtcNow;
+        Status = JobStatus.Active;
+        ModerationReason = null;
+        ModeratedBy = null;
+        ModeratedAt = null;
         Touch();
         return Result.Success();
     }

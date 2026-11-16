@@ -112,18 +112,17 @@ internal sealed class RecommendationTestHost : IAsyncDisposable
         return (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
     }
 
-    /// <summary>Creates a job while admin approval is on, so it stays Pending.</summary>
-    public async Task<Guid> CreatePendingJobAsync(string title, Guid? categoryId, string location)
+    /// <summary>Seeds a non-Active job directly (the public API only creates Active jobs).</summary>
+    public async Task<Guid> CreateHiddenJobAsync(string title, Guid? categoryId, string location)
     {
-        _app.Configuration["FEATURE_ADMIN_APPROVAL"] = "true";
-        try
-        {
-            return await CreateJobAsync(title, categoryId, location);
-        }
-        finally
-        {
-            _app.Configuration["FEATURE_ADMIN_APPROVAL"] = "false";
-        }
+        using var scope = _app.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<JobDbContext>();
+        var job = new Job.Core.Entities.Job(title, "Mô tả công việc", CompanyId, location, RecruiterId);
+        job.Close();
+        typeof(Job.Core.Entities.Job).GetProperty(nameof(Job.Core.Entities.Job.CreatedAt))!.SetValue(job, DateTime.UtcNow);
+        db.Jobs.Add(job);
+        await db.SaveChangesAsync();
+        return job.Id;
     }
 
     /// <summary>Soft-deletes through DELETE /api/jobs/{id}.</summary>

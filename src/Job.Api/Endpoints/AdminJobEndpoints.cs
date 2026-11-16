@@ -9,18 +9,19 @@ using JobPosting = Job.Core.Entities.Job;
 namespace Job.Api.Endpoints;
 
 /// <summary>
-/// Admin-only job management endpoints (feat(admin): Slice 4).
+/// Admin-only job management endpoints (feat(admin): Slice 4, moderation only).
 /// GET    /api/admin/jobs                  — paginated job list (all statuses, optional title search q)
 /// GET    /api/admin/jobs/{id}             — full job detail
 /// POST   /api/admin/jobs                  — create a job (Active, posted by the admin)
 /// PUT    /api/admin/jobs/{id}             — update any job that is not soft-deleted
 /// DELETE /api/admin/jobs/{id}             — soft delete (idempotent)
 /// DELETE /api/admin/jobs/{id}/permanent   — hard delete a soft-deleted job from the DB
-/// POST   /api/admin/jobs/{id}/approve     — approve a Pending job
-/// POST   /api/admin/jobs/{id}/reject      — reject a Pending job with reason
+/// POST   /api/admin/jobs/{id}/takedown    — take an Active/Closed job down with a required reason
+/// POST   /api/admin/jobs/{id}/restore     — restore a job taken down by moderation
 /// All endpoints require X-User-Role: Admin.
-/// Uses IgnoreQueryFilters() so Admin can see Pending and Rejected jobs.
-/// Every write that changes a job (create, update, approve, reject, soft and hard delete) adds its
+/// There is no approve/reject step: company jobs publish instantly. Moderation can only remove and restore.
+/// Uses IgnoreQueryFilters() so Admin can see soft-deleted jobs.
+/// Every write that changes a job (create, update, takedown, restore, soft and hard delete) adds its
 /// job event to the outbox in the same SaveChangesAsync call, so search-svc follows the change.
 /// </summary>
 public static class AdminJobEndpoints
@@ -40,8 +41,8 @@ public static class AdminJobEndpoints
         group.MapPut("/{id:guid}", UpdateJob);
         group.MapDelete("/{id:guid}", SoftDeleteJob);
         group.MapDelete("/{id:guid}/permanent", HardDeleteJob);
-        group.MapPost("/{id:guid}/approve", ApproveJob);
-        group.MapPost("/{id:guid}/reject", RejectJob);
+        group.MapPost("/{id:guid}/takedown", TakedownJob);
+        group.MapPost("/{id:guid}/restore", RestoreJob);
         return app;
     }
 
@@ -65,7 +66,7 @@ public static class AdminJobEndpoints
         page = Math.Max(1, page);
         size = Math.Clamp(size, 1, 100);
 
-        // IgnoreQueryFilters: Admin can see all statuses including Pending/Rejected/Deleted
+        // IgnoreQueryFilters: Admin can see every status, including soft-deleted (taken down) jobs
         var query = db.Jobs.IgnoreQueryFilters()
             .AsNoTracking()
             .Include(j => j.Company)
@@ -226,8 +227,8 @@ public static class AdminJobEndpoints
             return Results.ValidationProblem(new Dictionary<string, string[]> { ["request"] = [ex.Message] });
         }
 
-        // Update() never changes the status: the event carries the actual one so a Pending or
-        // Closed job edited here stays out of the public index.
+        // Update() never changes the status: the event carries the actual one so a Closed job
+        // edited here stays out of the active-only company listing.
         db.OutboxEvents.Add(JobOutboxEvents.Updated(job, company!.Name, category?.Name));
         await db.SaveChangesAsync(ct);
 
@@ -324,11 +325,16 @@ public static class AdminJobEndpoints
         return (company, category, null);
     }
 
-    // ── POST /api/admin/jobs/{id}/approve ─────────────────────────────────────
+    // ── POST /api/admin/jobs/{id}/takedown ───────────────────────────────────
 
-    private static async Task<IResult> ApproveJob(
+    /// <summary>
+    /// Takes a job down with a required reason. Status becomes Deleted (same state as a recruiter
+    /// soft-delete) and the reason/actor/time audit is persisted. Idempotent: a job already taken down
+    /// by moderation answers 200 without touching the stored audit.
+    /// </summary>
+    private static async Task<IResult> TakedownJob(
         Guid id,
-        ApproveJobRequest? body,
+        TakedownJobRequest? body,
         JobDbContext db,
         HttpContext ctx,
         ILoggerFactory loggerFactory,
@@ -338,82 +344,81 @@ public static class AdminJobEndpoints
         if (adminId is null) return UnauthorizedResult();
         if (role != "Admin") return ForbiddenResult();
 
-        // IgnoreQueryFilters: find Pending jobs hidden from public query filter
-        var job = await db.Jobs.IgnoreQueryFilters()
-            .Include(j => j.Company)
-            .Include(j => j.Category)
-            .FirstOrDefaultAsync(j => j.Id == id, ct);
-
-        if (job is null)
-            return Results.NotFound(new { message = "Job not found." });
-
-        var approveResult = job.ApprovePending(adminId.Value);
-        if (!approveResult.IsSuccess)
-            return Results.Json(new { message = approveResult.Error }, statusCode: 400);
-
-        // ATOMIC: job update + outbox event in one SaveChanges (single DB transaction)
-        db.OutboxEvents.Add(JobOutboxEvents.Updated(job, job.Company?.Name ?? "", job.Category?.Name));
-
-        await db.SaveChangesAsync(ct);
-
-        loggerFactory.CreateLogger("AdminJobEndpoints").LogInformation(
-            "Admin {AdminId} approved job {JobId}. Note={Note}",
-            adminId.Value, job.Id, body?.Note);
-        return Results.Ok(new { message = "Job approved.", jobId = job.Id });
-    }
-
-    // ── POST /api/admin/jobs/{id}/reject ──────────────────────────────────────
-
-    private static async Task<IResult> RejectJob(
-        Guid id,
-        RejectJobRequest? body,
-        JobDbContext db,
-        HttpContext ctx,
-        ILoggerFactory loggerFactory,
-        CancellationToken ct = default)
-    {
-        var (adminId, role) = IdentityHelper.GetIdentity(ctx);
-        if (adminId is null) return UnauthorizedResult();
-        if (role != "Admin") return ForbiddenResult();
-
-        // Validate reason input BEFORE touching DB (fail-fast)
+        // Validate the reason before touching the DB (fail fast).
         var reason = body?.Reason?.Trim();
         if (string.IsNullOrWhiteSpace(reason))
-            return Results.Json(new { message = "Rejection reason is required." }, statusCode: 422);
-        if (reason.Length > 500)
-            return Results.Json(new { message = "Rejection reason must not exceed 500 characters." }, statusCode: 422);
+            return Results.Json(new { message = "Takedown reason is required." }, statusCode: 422);
+        if (reason.Length > JobPosting.ModerationReasonMaxLength)
+            return Results.Json(
+                new { message = $"Takedown reason must not exceed {JobPosting.ModerationReasonMaxLength} characters." },
+                statusCode: 422);
+
+        var job = await db.Jobs.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(j => j.Id == id, ct);
+        if (job is null)
+            return Results.NotFound(new { message = "Job not found." });
+
+        // Idempotent: a repeated takedown keeps the original reason/actor/time and queues no second event.
+        // A job soft-deleted by its recruiter has no moderation record, so takedown still applies.
+        if (job.Status == JobStatus.Deleted && job.ModerationReason is not null)
+            return Results.Ok(new { message = "Job already taken down.", jobId = job.Id });
+
+        var result = job.Takedown(reason, adminId.Value);
+        if (!result.IsSuccess)
+            return Results.Json(new { message = result.Error }, statusCode: 422);
+
+        // job.deleted removes the document from search-svc (idempotent there too).
+        db.OutboxEvents.Add(JobOutboxEvents.Deleted(job.Id));
+        await db.SaveChangesAsync(ct);
+
+        loggerFactory.CreateLogger("AdminJobEndpoints").LogWarning(
+            "Admin {AdminId} took down job {JobId}. Reason={Reason}", adminId.Value, job.Id, job.ModerationReason);
+        return Results.Ok(new { message = "Job taken down.", jobId = job.Id });
+    }
+
+    // ── POST /api/admin/jobs/{id}/restore ────────────────────────────────────
+
+    /// <summary>
+    /// Restores a job that was taken down by moderation: Active again, audit cleared, and a job.updated
+    /// event re-indexes it (search-svc upserts Active documents on job.updated).
+    /// A job deleted by its recruiter has no moderation record and is not restorable (409).
+    /// </summary>
+    private static async Task<IResult> RestoreJob(
+        Guid id,
+        JobDbContext db,
+        HttpContext ctx,
+        ILoggerFactory loggerFactory,
+        CancellationToken ct = default)
+    {
+        var (adminId, role) = IdentityHelper.GetIdentity(ctx);
+        if (adminId is null) return UnauthorizedResult();
+        if (role != "Admin") return ForbiddenResult();
 
         var job = await db.Jobs.IgnoreQueryFilters()
             .Include(j => j.Company)
             .Include(j => j.Category)
             .FirstOrDefaultAsync(j => j.Id == id, ct);
-
         if (job is null)
             return Results.NotFound(new { message = "Job not found." });
 
-        var rejectResult = job.RejectPending(reason, adminId.Value);
-        if (!rejectResult.IsSuccess)
-            return Results.Json(new { message = rejectResult.Error }, statusCode: 400);
+        var result = job.Restore();
+        if (!result.IsSuccess)
+            return Results.Json(new { message = result.Error }, statusCode: 409);
 
-        // ATOMIC: job update + outbox event in one SaveChanges (single DB transaction)
+        // job.updated with status Active: search-svc re-indexes the document.
         db.OutboxEvents.Add(JobOutboxEvents.Updated(job, job.Company?.Name ?? "", job.Category?.Name));
-
         await db.SaveChangesAsync(ct);
 
         loggerFactory.CreateLogger("AdminJobEndpoints").LogInformation(
-            "Admin {AdminId} rejected job {JobId}.",
-            adminId.Value, job.Id);
-        return Results.Ok(new { message = "Job rejected.", jobId = job.Id });
+            "Admin {AdminId} restored job {JobId}.", adminId.Value, job.Id);
+        return Results.Ok(new { message = "Job restored.", jobId = job.Id });
     }
 }
 
 // ── Request / Response DTOs ───────────────────────────────────────────────────
 
-/// <summary>Request body for job approval.</summary>
-public record ApproveJobRequest(string? Note);
-
-/// <summary>Request body for job rejection.</summary>
-public record RejectJobRequest(string? Reason);
+/// <summary>Request body for a moderation takedown; the reason is required.</summary>
+public record TakedownJobRequest(string? Reason);
 
 /// <summary>Admin job list item DTO (GET /api/admin/jobs).</summary>
 public record JobAdminListDto(
@@ -426,16 +431,23 @@ public record JobAdminListDto(
     string? CategoryName,
     DateTime CreatedAt,
     string Location,
-    DateTime UpdatedAt)
+    DateTime UpdatedAt,
+    string? ModerationReason,
+    Guid? ModeratedBy,
+    DateTime? ModeratedAt)
 {
     public static JobAdminListDto From(JobPosting job) => new(
         job.Id, job.Title, job.Status.ToString(),
         job.CompanyId, job.Company?.Name,
         job.RecruiterId, job.Category?.Name,
-        job.CreatedAt, job.Location, job.UpdatedAt);
+        job.CreatedAt, job.Location, job.UpdatedAt,
+        job.ModerationReason, job.ModeratedBy, job.ModeratedAt);
 }
 
-/// <summary>Admin job detail DTO (GET /api/admin/jobs/{id}) — full fields including rejection info.</summary>
+/// <summary>
+/// Admin job detail DTO (GET /api/admin/jobs/{id}) — full fields plus the moderation audit.
+/// Legacy rows converted from the removed approval flow (Rejected -&gt; Closed) carry their reason here.
+/// </summary>
 public record JobAdminDetailDto(
     Guid Id,
     string Title,
@@ -457,13 +469,10 @@ public record JobAdminDetailDto(
     int ViewCount,
     DateTime CreatedAt,
     DateTime UpdatedAt,
-    // Rejection fields
-    string? RejectionReason,
-    DateTime? RejectedAt,
-    Guid? RejectedBy,
-    // Approval fields
-    DateTime? ApprovedAt,
-    Guid? ApprovedBy)
+    // Moderation fields (takedown reason, actor and time)
+    string? ModerationReason,
+    Guid? ModeratedBy,
+    DateTime? ModeratedAt)
 {
     public static JobAdminDetailDto From(JobPosting job) => new(
         job.Id, job.Title, job.Description, job.Status.ToString(),
@@ -474,6 +483,5 @@ public record JobAdminDetailDto(
         job.EmploymentType, job.ExperienceLevel,
         job.RecruiterId, job.ViewCount,
         job.CreatedAt, job.UpdatedAt,
-        job.RejectionReason, job.RejectedAt, job.RejectedBy,
-        job.ApprovedAt, job.ApprovedBy);
+        job.ModerationReason, job.ModeratedBy, job.ModeratedAt);
 }

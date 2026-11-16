@@ -11,7 +11,9 @@ namespace Job.Api.Endpoints;
 /// Company endpoints per SRS D.1 lines 220-223 and JOB-01.
 /// POST   /api/companies      — always 409 ACCOUNT_ALREADY_HAS_COMPANY for a Recruiter (AUTH-01-06)
 /// GET    /api/companies      — Public list with search &amp; pagination
+/// GET    /api/companies/mine — Recruiter's own company plus isCompanyAdmin
 /// GET    /api/companies/{id} — Public detail
+/// GET    /api/companies/{id}/jobs — Public Active jobs of that company (company page), 0-based paging
 /// PUT    /api/companies/{id} — Update company (owner Recruiter only)
 /// NOTE: no DELETE /api/companies/{id} by design — SRS D.1 defines POST/GET/GET/PUT
 /// only for companies, and Jobs.CompanyId FK uses Restrict (a referenced company
@@ -41,6 +43,20 @@ public static class CompanyEndpoints
             .WithName("GetCompanyById")
             .WithSummary("Get company detail by ID (Public)")
             .Produces<CompanyDetailDto>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status404NotFound);
+
+        group.MapGet("/mine", GetMyCompany)
+            .WithName("GetMyCompany")
+            .WithSummary("Get the signed-in recruiter's company and whether they are its admin")
+            .Produces<CompanyMineDto>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status401Unauthorized)
+            .Produces(StatusCodes.Status403Forbidden)
+            .Produces(StatusCodes.Status404NotFound);
+
+        group.MapGet("/{id:guid}/jobs", GetCompanyJobs)
+            .WithName("GetCompanyJobs")
+            .WithSummary("List a company's Active jobs, newest first (Public company page)")
+            .Produces<PaginatedResponse<PublicJobSummaryDto>>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status404NotFound);
 
         group.MapPut("/{id:guid}", UpdateCompany)
@@ -206,6 +222,75 @@ public static class CompanyEndpoints
 
     private static string EscapeLike(string term) =>
         term.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
+
+    /// <summary>
+    /// GET /api/companies/{id}/jobs?page=0&amp;size=20 — public company page listing.
+    /// Active jobs only (soft-deleted and Closed are hidden), newest first, 0-based paging like search
+    /// (size capped at 100). Returns 404 for an unknown company so a broken link is not an empty page.
+    /// </summary>
+    private static async Task<IResult> GetCompanyJobs(
+        Guid id,
+        JobDbContext db,
+        int page = 0,
+        int size = 20,
+        CancellationToken ct = default)
+    {
+        page = Math.Max(0, page);
+        size = Math.Clamp(size, 1, 100);
+
+        var companyExists = await db.Companies.AsNoTracking().AnyAsync(c => c.Id == id, ct);
+        if (!companyExists)
+            return Results.NotFound(new { message = "Company not found" });
+
+        var query = db.Jobs.AsNoTracking()
+            .Where(j => j.CompanyId == id && j.Status == JobStatus.Active);
+
+        var total = await query.CountAsync(ct);
+        var items = await query
+            .Include(j => j.Company)
+            .Include(j => j.Category)
+            .OrderByDescending(j => j.CreatedAt)
+            .ThenByDescending(j => j.Id)
+            .Skip(page * size)
+            .Take(size)
+            .ToListAsync(ct);
+
+        var dtos = items.Select(PublicJobSummaryDto.From).ToList();
+        var totalPages = (int)Math.Ceiling((double)total / size);
+        return Results.Ok(new PaginatedResponse<PublicJobSummaryDto>(dtos, total, page, size, totalPages));
+    }
+
+    /// <summary>
+    /// GET /api/companies/mine — the company linked to the signed-in Recruiter, resolved the same way
+    /// as POST /api/jobs: the <c>company_id</c> claim, falling back to <c>CreatedBy</c> for older tokens.
+    /// <c>isCompanyAdmin</c> is true only for the company creator (<c>CreatedBy == userId</c>); other
+    /// recruiters of the company are members with view-only access. 404 when no company is linked.
+    /// </summary>
+    private static async Task<IResult> GetMyCompany(
+        JobDbContext db,
+        HttpContext ctx,
+        CancellationToken ct = default)
+    {
+        var (userId, role) = IdentityHelper.GetIdentity(ctx);
+        if (userId is null)
+            return UnauthorizedResult();
+        if (role != "Recruiter")
+            return ForbiddenResult();
+
+        var claimedCompanyId = IdentityHelper.GetCompanyId(ctx);
+        Company? company = claimedCompanyId is { } companyId
+            ? await db.Companies.AsNoTracking().FirstOrDefaultAsync(c => c.Id == companyId, ct)
+            : null;
+
+        // Older tokens carry no company claim: the creator's own company is the fallback.
+        company ??= await db.Companies.AsNoTracking()
+            .FirstOrDefaultAsync(c => c.CreatedBy == userId.Value, ct);
+
+        if (company is null)
+            return Results.NotFound(new { message = "No company is linked to this account." });
+
+        return Results.Ok(CompanyMineDto.From(company, userId.Value));
+    }
 
     /// <summary>
     /// GET /api/companies/{id} — public, returns 404 if not found.

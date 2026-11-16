@@ -114,16 +114,16 @@ public sealed class RecommendationServiceTests
     }
 
     [Fact]
-    public async Task ClosedPendingAndDeletedJobs_NeverAppear()
+    public async Task ClosedAndDeletedJobs_NeverAppear()
     {
         await using var host = await RecommendationTestHost.StartAsync();
         var applied = await host.CreateJobAsync("Lập trình viên Java", It, "Đà Nẵng");
         var closed = await host.CreateJobAsync("Lập trình viên Go", It, "Đà Nẵng");
         var deleted = await host.CreateJobAsync("Lập trình viên Rust", It, "Đà Nẵng");
-        var pending = await host.CreatePendingJobAsync("Lập trình viên Kotlin", It, "Đà Nẵng");
+        var hidden = await host.CreateHiddenJobAsync("Lập trình viên Kotlin", It, "Đà Nẵng");
         var active = await host.CreateJobAsync("Lập trình viên .NET", It, "Đà Nẵng");
         var (a, b) = (Guid.NewGuid(), Guid.NewGuid());
-        foreach (var job in new[] { applied, closed, deleted, pending, active })
+        foreach (var job in new[] { applied, closed, deleted, hidden, active })
             await host.Consumer.ApplyAsync(b, job);
         await host.Consumer.ApplyAsync(a, applied);
         await host.CloseJobAsync(closed);
