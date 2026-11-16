@@ -126,13 +126,17 @@ internal sealed class JobApiTestHost : IAsyncDisposable
         return await publisher.PublishPendingAsync(CancellationToken.None);
     }
 
-    public Task<HttpResponseMessage> SendAsync(HttpMethod method, string url, Guid? userId, string? role, object? body = null)
+    public Task<HttpResponseMessage> SendAsync(
+        HttpMethod method, string url, Guid? userId, string? role, object? body = null, Guid? companyId = null)
     {
         var request = new HttpRequestMessage(method, url);
         if (userId is { } id)
             request.Headers.Add("X-User-Id", id.ToString());
         if (role is not null)
             request.Headers.Add("X-User-Role", role);
+        // Mirrors the gateway, which copies the JWT company_id claim into X-User-Company.
+        if (companyId is { } company)
+            request.Headers.Add("X-User-Company", company.ToString());
         if (body is not null)
             request.Content = JsonContent.Create(body);
         return Client.SendAsync(request);

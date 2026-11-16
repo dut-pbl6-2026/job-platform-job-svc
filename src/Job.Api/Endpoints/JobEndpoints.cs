@@ -11,14 +11,16 @@ namespace Job.Api.Endpoints;
 
 /// <summary>
 /// Job CRUD endpoints per SRS JOB-01-01 to JOB-01-05.
-/// POST   /api/jobs          — Recruiter only
+/// POST   /api/jobs          — Recruiter belonging to the company (JOB-01-01, AUTH-01-09)
 /// GET    /api/jobs/recruiter — Recruiter's own jobs (paginated, filterable)
 /// GET    /api/jobs/{id}     — public, non-deleted only
-/// PUT    /api/jobs/{id}     — Recruiter (owner only)
+/// PUT    /api/jobs/{id}     — Recruiter (job owner), company must be one the caller belongs to
 /// DELETE /api/jobs/{id}     — Recruiter (owner only), soft delete
 /// </summary>
 public static class JobEndpoints
 {
+    private const string NotCompanyMemberCode = "not_company_member";
+
     public static WebApplication MapJobEndpoints(this WebApplication app)
     {
         var group = app.MapGroup("/api/jobs").WithTags("Jobs");
@@ -36,8 +38,29 @@ public static class JobEndpoints
     private static IResult UnauthorizedResult() =>
         Results.Json(new { message = "Unauthorized. Missing or invalid X-User-Id." }, statusCode: 401);
 
-    private static IResult ForbiddenResult(string message = "Forbidden. Recruiter role required.") =>
-        Results.Json(new { message }, statusCode: 403);
+    private static IResult ForbiddenResult(string message = "Forbidden. Recruiter role required.", string? code = null)
+    {
+        var body = new Dictionary<string, string> { ["message"] = message };
+        if (code is not null)
+            body["code"] = code;
+        return Results.Json(body, statusCode: 403);
+    }
+
+    /// <summary>
+    /// Job creation requires belonging to the target company: any Recruiter the company invited may post
+    /// (JOB-01-01, AUTH-01-09). The company_id claim decides membership; when it is absent (older token or
+    /// dev auth without X-User-Company) the legacy creator-only check keeps existing seeds working.
+    /// </summary>
+    private static bool CallerBelongsToCompany(HttpContext ctx, Guid recruiterId, Company company)
+    {
+        var claimedCompanyId = IdentityHelper.GetCompanyId(ctx);
+        return claimedCompanyId is not null
+            ? claimedCompanyId.Value == company.Id
+            : company.CreatedBy == recruiterId;
+    }
+
+    private static IResult NotCompanyMemberResult() =>
+        ForbiddenResult("Forbidden. You do not belong to this company.", NotCompanyMemberCode);
 
     private static async Task<IResult> CreateJob(
         JobCreateDto dto,
@@ -70,8 +93,8 @@ public static class JobEndpoints
         if (company is null)
             return Results.ValidationProblem(new Dictionary<string, string[]>
             { ["companyId"] = ["Company not found."] });
-        if (company.CreatedBy != recruiterId.Value)
-            return ForbiddenResult("Forbidden. You do not own this company.");
+        if (!CallerBelongsToCompany(ctx, recruiterId.Value, company))
+            return NotCompanyMemberResult();
 
         Category? category = null;
         if (dto.CategoryId.HasValue)
@@ -192,8 +215,8 @@ public static class JobEndpoints
         if (updateCompany is null)
             return Results.ValidationProblem(new Dictionary<string, string[]>
             { ["companyId"] = ["Company not found."] });
-        if (updateCompany.CreatedBy != recruiterId.Value)
-            return ForbiddenResult("Forbidden. You do not own this company.");
+        if (!CallerBelongsToCompany(ctx, recruiterId.Value, updateCompany))
+            return NotCompanyMemberResult();
 
         Category? updateCategory = null;
         if (dto.CategoryId.HasValue)
